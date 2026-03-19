@@ -1,10 +1,11 @@
-# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar
+# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render
 import asyncio
 import logging
 import re
 import os
 import json
 import tempfile
+import threading
 from typing import List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func
+from flask import Flask, jsonify
 
 from config import settings
 from db import get_session, init_db
@@ -63,6 +65,27 @@ from yandex_calendar import YandexCalendarClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ===== ВЕБ-СЕРВЕР ДЛЯ RENDER HEALTH CHECKS =====
+app = Flask(__name__)
+
+@app.route('/')
+@app.route('/health')
+@app.route('/ping')
+def health_check():
+    """Endpoint для проверки здоровья сервиса Render.com"""
+    return jsonify({
+        'status': 'ok',
+        'service': 'GWork HR Bot',
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+def run_web_server():
+    """Запускает Flask сервер в отдельном потоке"""
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🌐 Запуск веб-сервера для health checks на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 
 bot = Bot(settings.bot_token)
@@ -3454,6 +3477,11 @@ async def main() -> None:
     logger.info(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
     logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
     logger.info("=" * 60)
+    
+    # Запускаем веб-сервер для Render health checks в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
     
     await dp.start_polling(bot)
 
