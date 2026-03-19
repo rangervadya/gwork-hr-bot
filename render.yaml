@@ -5,7 +5,7 @@ services:
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false  # Это означает, что значение нужно установить в панели управления
