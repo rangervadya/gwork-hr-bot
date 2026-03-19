@@ -1,4 +1,4 @@
-# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render
+# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support
 import asyncio
 import logging
 import re
@@ -6,7 +6,7 @@ import os
 import json
 import tempfile
 import threading
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -61,6 +61,7 @@ from analytics import (
 )
 from email_service import email_service
 from yandex_calendar import YandexCalendarClient
+from vk_bot import init_vk_bot, vk_bot, VKBot
 
 
 logging.basicConfig(level=logging.INFO)
@@ -104,6 +105,70 @@ def clean_html(text: str) -> str:
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
+
+
+# ===== ФУНКЦИИ ДЛЯ РАБОТЫ С VK =====
+
+async def send_vk_message_to_candidate(candidate: Candidate, message_text: str) -> bool:
+    """
+    Отправляет сообщение кандидату через VK
+    """
+    global vk_bot
+    
+    if not vk_bot:
+        logger.warning("⚠️ VK бот не инициализирован")
+        return False
+    
+    # Используем метод отправки сообщения кандидату
+    return vk_bot.send_message_to_candidate(candidate, message_text)
+
+
+async def handle_vk_message(message_data: Dict[str, Any]):
+    """
+    Обрабатывает сообщение из VK
+    """
+    try:
+        user_id = message_data['user_id']
+        text = message_data['text']
+        payload = message_data.get('payload')
+        
+        logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
+        
+        # Ищем кандидата по VK ID в контактах
+        with get_session() as session:
+            # Ищем кандидата, у которого контакт содержит этот VK ID
+            candidates = session.query(Candidate).filter(
+                Candidate.contact.like(f"%{user_id}%")
+            ).all()
+            
+            if not candidates:
+                logger.info(f"Кандидат с VK ID {user_id} не найден")
+                return
+            
+            candidate = candidates[0]  # Берём первого подходящего
+            
+            # Проверяем, не отсеян ли кандидат
+            if candidate.status == CandidateStatus.REJECTED.value:
+                return
+            
+            vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
+            company = session.query(Company).filter(Company.id == vacancy.company_id).first()
+            
+            if not vacancy or not company:
+                return
+            
+            # Обновляем информацию о последнем ответе
+            candidate.last_reply = text[:500]
+            candidate.last_reply_at = datetime.now()
+            candidate.last_activity_at = datetime.now()
+            
+            # Здесь можно добавить логику обработки ответов,
+            # аналогичную той, что в handle_candidate_reply для Telegram
+            
+            session.commit()
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
 
 
 # ===== ПОИСК РЕАЛЬНЫХ РЕЗЮМЕ В HEADHUNTER =====
@@ -582,7 +647,7 @@ async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> 
 
 async def send_message_to_candidate(candidate: Candidate, message_text: str) -> bool:
     """
-    Отправляет сообщение кандидату через Telegram
+    Отправляет сообщение кандидату через Telegram или VK
     Возвращает True если успешно, False если нет
     """
     try:
@@ -591,6 +656,7 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
             logger.warning(f"Нет контакта для кандидата {candidate.id}")
             return False
         
+        # Проверяем, является ли контакт Telegram username
         if contact.startswith('@'):
             username = contact[1:]
             try:
@@ -615,7 +681,17 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
                 logger.error(f"❌ Ошибка отправки @{username}: {e}")
                 return False
         
-        logger.info(f"Контакт {contact} не является Telegram username")
+        # Проверяем, является ли контакт VK ID
+        vk_match = re.search(r'vk(\d+)|^(\d+)$', contact)
+        if vk_match:
+            vk_id = vk_match.group(1) or vk_match.group(2)
+            if vk_id and vk_bot:
+                success = vk_bot.send_message_to_candidate(candidate, message_text)
+                if success:
+                    logger.info(f"✅ Сообщение отправлено VK ID {vk_id}")
+                return success
+        
+        logger.info(f"Контакт {contact} не является Telegram username или VK ID")
         return False
         
     except Exception as e:
@@ -3404,6 +3480,7 @@ async def cmd_help_hr(message: Message):
 👨‍💻 Habr Career - IT-специалисты
 🏢 Работа в России - гос.портал
 ✈️ Telegram - парсинг каналов
+📱 VK - ВКонтакте
 
 <b>🔍 ЖЁСТКИЕ ФИЛЬТРЫ</b>
 • Город должен совпадать
@@ -3475,6 +3552,7 @@ async def main() -> None:
     logger.info(f"✅ HABR_CLIENT_ID: {'установлен' if settings.habr_client_id else 'НЕ УСТАНОВЛЕН'}")
     logger.info(f"✅ DEEPSEEK_API_KEY: {'установлен' if settings.deepseek_api_key else 'НЕ УСТАНОВЛЕН'}")
     logger.info(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ VK_TOKEN: {'установлен' if settings.vk_token else 'НЕ УСТАНОВЛЕН'}")
     logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
     logger.info("=" * 60)
     
@@ -3482,6 +3560,15 @@ async def main() -> None:
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
+    
+    # Инициализируем VK бота, если есть токен
+    vk_bot_instance = None
+    if settings.has_vk:
+        vk_bot_instance = init_vk_bot()
+        if vk_bot_instance:
+            # Запускаем VK бота в отдельной задаче
+            asyncio.create_task(vk_bot_instance.start_polling(handle_vk_message))
+            logger.info("📱 VK бот запущен в фоновом режиме")
     
     await dp.start_polling(bot)
 
