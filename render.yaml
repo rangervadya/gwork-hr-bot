@@ -2,16 +2,18 @@ services:
   - type: web
     name: gwork-hr-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
     startCommand: python main.py
     envVars:
       - key: BOT_TOKEN
-        value: 8565237284:AAG24gDAsXNkNKMJGx4uZaBsPLlpeyZCsT4
+        sync: false  # Это означает, что значение нужно установить в панели управления
       - key: HH_API_TOKEN
-        value: USERH7PDH2H8Q3G3C3S6BA07EDAOMCS45IM89HV0KS0HNNG978R925LHFKLCCE37
+        sync: false
       - key: SUPERJOB_API_KEY
-        value: v3.h.4954828.468e2a01714c919db05b73123326a4809e33c526.b9c0e8b6abbe457794fe0225bdb8474433e75928
+        sync: false
       - key: YANDEX_LOGIN
-        value: rangercompany@yandex.ru
+        sync: false
       - key: YANDEX_APP_PASSWORD
-        value: hlvtuuzkhixffich
+        sync: false
