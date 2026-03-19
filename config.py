@@ -40,7 +40,17 @@ class Settings:
     avito_token: str = os.getenv("AVITO_TOKEN", "")
     avito_base_url: str = os.getenv("AVITO_BASE_URL", "https://api.avito.ru")
 
-    # === НОВЫЕ ПОЛЯ ДЛЯ ЯНДЕКС.КАЛЕНДАРЯ ===
+    # === VK (ВКОНТАКТЕ) ===
+    vk_token: str = os.getenv("VK_TOKEN", "")
+    """Токен доступа к VK API для бота группы"""
+    
+    vk_group_id: int = int(os.getenv("VK_GROUP_ID", "0")) if os.getenv("VK_GROUP_ID", "").isdigit() else 0
+    """ID группы ВКонтакте (опционально)"""
+    
+    vk_api_version: str = os.getenv("VK_API_VERSION", "5.131")
+    """Версия VK API"""
+
+    # === ЯНДЕКС.КАЛЕНДАРЬ ===
     yandex_login: str = os.getenv("YANDEX_LOGIN", "")
     """Логин от Яндекса (полный email, например: user@yandex.ru)"""
     
@@ -73,6 +83,11 @@ class Settings:
             if x.strip().isdigit()
         }
 
+    @property
+    def has_vk(self) -> bool:
+        """Проверяет, настроен ли VK бот"""
+        return bool(self.vk_token)
+
 
 settings = Settings()
 
@@ -84,6 +99,7 @@ print(f"✅ HH_API_TOKEN: {'установлен' if settings.hh_api_token else 
 print(f"✅ SUPERJOB_API_KEY: {'установлен' if settings.superjob_api_key else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ HABR_CLIENT_ID: {'установлен' if settings.habr_client_id else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ DEEPSEEK_API_KEY: {'установлен' if settings.deepseek_api_key else 'НЕ УСТАНОВЛЕН'}")
+print(f"✅ VK_TOKEN: {'установлен' if settings.vk_token else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ YANDEX_APP_PASSWORD: {'установлен' if settings.yandex_app_password else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ SMTP: {'настроен' if settings.smtp_username and settings.smtp_password else 'НЕ НАСТРОЕН'}")
