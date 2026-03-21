@@ -13,6 +13,7 @@ from vk_api.utils import get_random_id
 from config import settings
 from models import Candidate, CandidateStatus
 from db import get_session
+from vk_handlers import handle_vk_message
 
 logger = logging.getLogger(__name__)
 
@@ -305,64 +306,7 @@ class VKBot:
             
             logger.info(f"📨 VK сообщение от {user_id}: {text[:50]}...")
             
-            # ===== ОБРАБОТКА КОМАНДЫ /start =====
-            if text == '/start' or text == 'start' or text == '/start@' or text == 'начать':
-                welcome_text = (
-                    "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
-                    "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
-                    "🔍 <b>Как я работаю:</b>\n"
-                    "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
-                    "• Автоматически проверяю резюме на соответствие требованиям\n"
-                    "• Общаюсь с кандидатами и провожу предквалификацию\n"
-                    "• Назначаю собеседования и отправляю приглашения\n\n"
-                    "📱 <b>Для работы используйте Telegram бота:</b>\n"
-                    "@goodWorkingBot\n\n"
-                    "Там вы можете:\n"
-                    "✅ Создать вакансию (/new_job)\n"
-                    "✅ Настроить фильтры (/filters)\n"
-                    "✅ Посмотреть кандидатов (/candidates)\n"
-                    "✅ Получить аналитику (/analytics)\n\n"
-                    "Вопросы? Обратитесь к администратору."
-                )
-                self.send_message(user_id, welcome_text)
-                return {
-                    'user_id': user_id,
-                    'text': text,
-                    'payload': payload,
-                    'message': message,
-                    'handled': True
-                }
-            
-            # ===== ОБРАБОТКА КОМАНДЫ /help =====
-            if text == '/help' or text == 'help' or text == 'помощь':
-                help_text = (
-                    "🤖 <b>GWork HR Bot - Помощь</b>\n\n"
-                    "<b>Основные команды в Telegram:</b>\n"
-                    "/start - начать работу\n"
-                    "/onboarding - создать профиль компании\n"
-                    "/new_job - создать новую вакансию\n"
-                    "/candidates - список кандидатов\n"
-                    "/filters - управление фильтрами\n"
-                    "/analytics - аналитика по вакансии\n"
-                    "/export - скачать отчёт (CSV/HTML)\n\n"
-                    "<b>В VK бот:</b>\n"
-                    "Я автоматически обрабатываю сообщения от кандидатов.\n"
-                    "Если вы кандидат, я задам вопросы и приглашу на собеседование.\n\n"
-                    "По всем вопросам обращайтесь к администратору."
-                )
-                self.send_message(user_id, help_text)
-                return {
-                    'user_id': user_id,
-                    'text': text,
-                    'payload': payload,
-                    'message': message,
-                    'handled': True
-                }
-            
-            # ===== ОБЫЧНАЯ ОБРАБОТКА СООБЩЕНИЙ ОТ КАНДИДАТОВ =====
-            # Здесь будет логика обработки сообщений от кандидатов
-            # Вызывается из основного бота
-            
+            # Возвращаем данные для обработки в основном хендлере
             return {
                 'user_id': user_id,
                 'text': text,
@@ -378,7 +322,7 @@ class VKBot:
         Запуск long polling для получения сообщений
         
         Args:
-            message_handler: Функция-обработчик сообщений
+            message_handler: Функция-обработчик сообщений (должна принимать data и vk_bot)
         """
         if not self.vk_session or not self.vk:
             logger.error("❌ VK сессия не инициализирована. Сначала выполните auth()")
@@ -401,10 +345,10 @@ class VKBot:
                     logger.info(f"📨 Получено новое сообщение от {event.object.message['from_id']}")
                     data = await self.process_event(event)
                     
-                    if message_handler and data and not data.get('handled', False):
+                    if message_handler and data:
                         try:
-                            # Вызываем обработчик из основного бота
-                            await message_handler(data)
+                            # Вызываем обработчик из основного бота, передаём vk_bot
+                            await message_handler(data, self)
                         except Exception as e:
                             logger.error(f"❌ Ошибка в обработчике сообщений: {e}")
                             traceback.print_exc()
