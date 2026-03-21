@@ -99,6 +99,8 @@ class VKBot:
                 logger.error(f"❌ Ошибка API при получении списка групп: {e}")
                 if e.code == 15:
                     logger.error("❌ Нет прав доступа к группам. Токен должен иметь права groups")
+                elif e.code == 27:
+                    logger.error("❌ Ошибка авторизации группы. Используйте пользовательский токен, а не токен сообщества.")
                 return False
             except Exception as e:
                 logger.error(f"❌ Неожиданная ошибка при получении групп: {e}")
@@ -111,6 +113,11 @@ class VKBot:
                 from vk_api.bot_longpoll import VkBotLongPoll
                 self.longpoll = VkBotLongPoll(self.vk_session, self.group_id)
                 logger.info(f"✅ VK LongPoll успешно настроен для группы {self.group_id}")
+            except vk_api.exceptions.ApiError as e:
+                logger.error(f"❌ Ошибка VK API при настройке LongPoll: {e}")
+                if e.code == 100:
+                    logger.error("❌ LongPoll не включен в настройках группы. Включите LongPoll API в разделе 'Работа с API'")
+                return False
             except Exception as e:
                 logger.error(f"❌ Ошибка настройки LongPoll: {e}")
                 traceback.print_exc()
@@ -293,11 +300,66 @@ class VKBot:
         if event.type == VkBotEventType.MESSAGE_NEW:
             message = event.object.message
             user_id = message['from_id']
-            text = message.get('text', '')
+            text = message.get('text', '').strip()
             payload = message.get('payload')
             
             logger.info(f"📨 VK сообщение от {user_id}: {text[:50]}...")
             
+            # ===== ОБРАБОТКА КОМАНДЫ /start =====
+            if text == '/start' or text == 'start' or text == '/start@' or text == 'начать':
+                welcome_text = (
+                    "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
+                    "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
+                    "🔍 <b>Как я работаю:</b>\n"
+                    "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
+                    "• Автоматически проверяю резюме на соответствие требованиям\n"
+                    "• Общаюсь с кандидатами и провожу предквалификацию\n"
+                    "• Назначаю собеседования и отправляю приглашения\n\n"
+                    "📱 <b>Для работы используйте Telegram бота:</b>\n"
+                    "@goodWorkingBot\n\n"
+                    "Там вы можете:\n"
+                    "✅ Создать вакансию (/new_job)\n"
+                    "✅ Настроить фильтры (/filters)\n"
+                    "✅ Посмотреть кандидатов (/candidates)\n"
+                    "✅ Получить аналитику (/analytics)\n\n"
+                    "Вопросы? Обратитесь к администратору."
+                )
+                self.send_message(user_id, welcome_text)
+                return {
+                    'user_id': user_id,
+                    'text': text,
+                    'payload': payload,
+                    'message': message,
+                    'handled': True
+                }
+            
+            # ===== ОБРАБОТКА КОМАНДЫ /help =====
+            if text == '/help' or text == 'help' or text == 'помощь':
+                help_text = (
+                    "🤖 <b>GWork HR Bot - Помощь</b>\n\n"
+                    "<b>Основные команды в Telegram:</b>\n"
+                    "/start - начать работу\n"
+                    "/onboarding - создать профиль компании\n"
+                    "/new_job - создать новую вакансию\n"
+                    "/candidates - список кандидатов\n"
+                    "/filters - управление фильтрами\n"
+                    "/analytics - аналитика по вакансии\n"
+                    "/export - скачать отчёт (CSV/HTML)\n\n"
+                    "<b>В VK бот:</b>\n"
+                    "Я автоматически обрабатываю сообщения от кандидатов.\n"
+                    "Если вы кандидат, я задам вопросы и приглашу на собеседование.\n\n"
+                    "По всем вопросам обращайтесь к администратору."
+                )
+                self.send_message(user_id, help_text)
+                return {
+                    'user_id': user_id,
+                    'text': text,
+                    'payload': payload,
+                    'message': message,
+                    'handled': True
+                }
+            
+            # ===== ОБЫЧНАЯ ОБРАБОТКА СООБЩЕНИЙ ОТ КАНДИДАТОВ =====
             # Здесь будет логика обработки сообщений от кандидатов
             # Вызывается из основного бота
             
@@ -305,7 +367,8 @@ class VKBot:
                 'user_id': user_id,
                 'text': text,
                 'payload': payload,
-                'message': message
+                'message': message,
+                'handled': False
             }
         
         return None
@@ -338,7 +401,7 @@ class VKBot:
                     logger.info(f"📨 Получено новое сообщение от {event.object.message['from_id']}")
                     data = await self.process_event(event)
                     
-                    if message_handler and data:
+                    if message_handler and data and not data.get('handled', False):
                         try:
                             # Вызываем обработчик из основного бота
                             await message_handler(data)
@@ -416,6 +479,7 @@ def init_vk_bot() -> Optional[VKBot]:
             logger.info("  1. Токен должен быть пользовательским, а не от сообщества")
             logger.info("  2. У токена должны быть права: messages, groups, offline")
             logger.info("  3. Вы должны быть администратором группы")
+            logger.info("  4. LongPoll API должен быть включен в настройках группы")
             return None
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации VK бота: {e}")
