@@ -9,7 +9,6 @@ from db import get_session
 from models import Candidate, CandidateStatus, Company, Vacancy
 from filters import apply_hard_filters, extract_salary, extract_experience_years, normalize_city
 from pre_qualification import PreQualificationAnalyzer
-from vk_bot import vk_bot
 
 logger = logging.getLogger(__name__)
 
