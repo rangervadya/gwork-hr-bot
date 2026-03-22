@@ -27,7 +27,7 @@ class VKUserState:
         self.page = 0      # pagination for candidates
 
 
-async def handle_vk_message(data: Dict[str, Any], vk_bot):
+async def handle_vk_message(data: Dict[str, Any]):
     """
     Главный обработчик сообщений от VK
     
