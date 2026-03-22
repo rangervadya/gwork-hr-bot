@@ -204,7 +204,7 @@ class VKBot:
         
         try:
             for event in self.longpoll.listen():
-                logger.info(f"📨 Получено событие: type={event.type}")  # ← ВАЖНО: логируем каждое событие
+                logger.info(f"📨 Получено событие: type={event.type}")
                 
                 if not self.running:
                     break
@@ -215,7 +215,8 @@ class VKBot:
                     if message_handler and data:
                         try:
                             logger.info("📨 Вызываем message_handler...")
-                            await message_handler(data, self)
+                            # Передаём только data (один аргумент)
+                            await message_handler(data)
                             logger.info("✅ message_handler выполнен")
                         except Exception as e:
                             logger.error(f"❌ Ошибка в обработчике: {e}")
