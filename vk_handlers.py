@@ -4,7 +4,6 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from vk_bot import VKBot
 from config import settings
 from db import get_session
 from models import Candidate, CandidateStatus, Company, Vacancy
@@ -23,13 +22,18 @@ class VKUserState:
         self.user_id = user_id
         self.state = None  # current state
         self.data = {}     # temporary data for onboarding/vacancy creation
+        self.step = 0      # current step in multi-step process
         self.vacancy_id = None  # current vacancy for candidates list
         self.page = 0      # pagination for candidates
 
 
-async def handle_vk_message(data: Dict[str, Any], vk_bot: VKBot):
+async def handle_vk_message(data: Dict[str, Any], vk_bot):
     """
     Главный обработчик сообщений от VK
+    
+    Args:
+        data: Словарь с данными сообщения (user_id, text, payload, message)
+        vk_bot: Экземпляр VKBot для отправки сообщений
     """
     user_id = data['user_id']
     text = data['text'].strip()
@@ -47,7 +51,7 @@ async def handle_vk_message(data: Dict[str, Any], vk_bot: VKBot):
         company = session.query(Company).filter(Company.owner_id == user_id).first()
         
         # Если нет компании и пользователь не в онбординге — предлагаем пройти
-        if not company and state.state != 'onboarding':
+        if not company and state.state != 'onboarding' and text not in ['/start', '/onboarding', 'start', 'начать']:
             await vk_bot.send_message(
                 user_id,
                 "👋 Добро пожаловать в GWork HR Bot!\n\n"
@@ -107,7 +111,7 @@ async def handle_vk_message(data: Dict[str, Any], vk_bot: VKBot):
         )
 
 
-async def handle_start(user_id: int, vk_bot: VKBot, company):
+async def handle_start(user_id: int, vk_bot, company):
     """Обработка /start"""
     if company:
         text = (
@@ -127,16 +131,21 @@ async def handle_start(user_id: int, vk_bot: VKBot, company):
             "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
             "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
             "🔍 <b>Что я умею:</b>\n"
-            "• Ищу кандидатов в 5+ источниках\n"
-            "• Автоматически проверяю резюме\n"
+            "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
+            "• Автоматически проверяю резюме на соответствие требованиям\n"
             "• Общаюсь с кандидатами и провожу предквалификацию\n"
-            "• Назначаю собеседования\n\n"
+            "• Назначаю собеседования и отправляю приглашения\n\n"
+            "📋 <b>Как создать вакансию:</b>\n"
+            "1. Напишите /new_job\n"
+            "2. Укажите роль и город\n"
+            "3. Задайте параметры поиска\n\n"
+            "После создания вакансии я начну поиск кандидатов и пришлю результаты сюда!\n\n"
             "Для начала работы напишите /onboarding"
         )
     await vk_bot.send_message(user_id, text)
 
 
-async def handle_onboarding_start(user_id: int, vk_bot: VKBot, state):
+async def handle_onboarding_start(user_id: int, vk_bot, state):
     """Начало онбординга"""
     state.state = 'onboarding'
     state.data = {}
@@ -150,7 +159,7 @@ async def handle_onboarding_start(user_id: int, vk_bot: VKBot, state):
     )
 
 
-async def handle_onboarding_step(user_id: int, vk_bot: VKBot, state, text: str):
+async def handle_onboarding_step(user_id: int, vk_bot, state, text: str):
     """Шаги онбординга"""
     step = state.step
     
@@ -217,6 +226,7 @@ async def handle_onboarding_step(user_id: int, vk_bot: VKBot, state, text: str):
         # Сбрасываем состояние
         state.state = None
         state.data = {}
+        state.step = 0
         
         await vk_bot.send_message(
             user_id,
@@ -226,7 +236,7 @@ async def handle_onboarding_step(user_id: int, vk_bot: VKBot, state, text: str):
         )
 
 
-async def handle_new_job_start(user_id: int, vk_bot: VKBot, state):
+async def handle_new_job_start(user_id: int, vk_bot, state):
     """Начало создания вакансии"""
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == user_id).first()
@@ -246,7 +256,7 @@ async def handle_new_job_start(user_id: int, vk_bot: VKBot, state):
     )
 
 
-async def handle_new_job_step(user_id: int, vk_bot: VKBot, state, text: str):
+async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
     """Шаги создания вакансии"""
     step = state.step
     
@@ -339,6 +349,7 @@ async def handle_new_job_step(user_id: int, vk_bot: VKBot, state, text: str):
         # Сбрасываем состояние
         state.state = None
         state.data = {}
+        state.step = 0
         
         await vk_bot.send_message(
             user_id,
@@ -351,7 +362,7 @@ async def handle_new_job_step(user_id: int, vk_bot: VKBot, state, text: str):
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
-async def search_and_notify(user_id: int, vacancy_id: int, vk_bot: VKBot):
+async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     """Поиск кандидатов и уведомление пользователя"""
     from bot import gather_real_candidates
     
@@ -374,7 +385,7 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot: VKBot):
         await vk_bot.send_message(user_id, f"❌ Ошибка поиска: {e}")
 
 
-async def handle_candidates(user_id: int, vk_bot: VKBot, company, state):
+async def handle_candidates(user_id: int, vk_bot, company, state):
     """Показ списка кандидатов"""
     if not company:
         await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
@@ -399,7 +410,7 @@ async def handle_candidates(user_id: int, vk_bot: VKBot, company, state):
         await send_candidates_page(user_id, vk_bot, vacancy, candidates, 0)
 
 
-async def send_candidates_page(user_id: int, vk_bot: VKBot, vacancy, candidates, page: int, per_page: int = 3):
+async def send_candidates_page(user_id: int, vk_bot, vacancy, candidates, page: int, per_page: int = 3):
     """Отправка одной страницы кандидатов"""
     total = len(candidates)
     total_pages = (total + per_page - 1) // per_page
@@ -422,19 +433,20 @@ async def send_candidates_page(user_id: int, vk_bot: VKBot, vacancy, candidates,
             card = build_simple_candidate_card(c)
             await vk_bot.send_message(user_id, card)
     
-    # Кнопки навигации
-    buttons = []
-    if page > 0:
-        buttons.append({'label': '◀ Назад', 'payload': {'action': 'candidates_page', 'page': page - 1}})
-    if page < total_pages - 1:
-        buttons.append({'label': 'Вперед ▶', 'payload': {'action': 'candidates_page', 'page': page + 1}})
-    
-    if buttons:
-        keyboard = {
-            'inline': True,
-            'buttons': [[{'action': {'type': 'text', 'label': b['label'], 'payload': str(b['payload'])}}] for b in buttons]
-        }
-        await vk_bot.send_message(user_id, "📌 Навигация:", keyboard)
+    # Кнопки навигации (если есть несколько страниц)
+    if total_pages > 1:
+        buttons = []
+        if page > 0:
+            buttons.append({'label': '◀ Назад', 'payload': {'action': 'candidates_page', 'page': page - 1}})
+        if page < total_pages - 1:
+            buttons.append({'label': 'Вперед ▶', 'payload': {'action': 'candidates_page', 'page': page + 1}})
+        
+        if buttons:
+            keyboard = {
+                'inline': True,
+                'buttons': [[{'action': {'type': 'text', 'label': b['label'], 'payload': str(b['payload'])}}] for b in buttons]
+            }
+            await vk_bot.send_message(user_id, "📌 Навигация:", keyboard)
 
 
 def build_simple_candidate_card(c: Candidate) -> str:
@@ -463,7 +475,7 @@ def build_simple_candidate_card(c: Candidate) -> str:
     return text
 
 
-async def handle_filters(user_id: int, vk_bot: VKBot, company):
+async def handle_filters(user_id: int, vk_bot, company):
     """Управление фильтрами"""
     if not company:
         await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
@@ -483,12 +495,13 @@ async def handle_filters(user_id: int, vk_bot: VKBot, company):
         f"/filter_city — включить/выключить город\n"
         f"/filter_salary — включить/выключить зарплату\n"
         f"/filter_experience — включить/выключить опыт\n"
-        f"/filter_skills — включить/выключить требования"
+        f"/filter_skills — включить/выключить требования\n\n"
+        f"<i>Примечание: полное управление фильтрами доступно в Telegram боте</i>"
     )
     await vk_bot.send_message(user_id, text)
 
 
-async def handle_analytics(user_id: int, vk_bot: VKBot, company):
+async def handle_analytics(user_id: int, vk_bot, company):
     """Аналитика по вакансии"""
     if not company:
         await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
@@ -523,25 +536,30 @@ async def handle_analytics(user_id: int, vk_bot: VKBot, company):
         await vk_bot.send_message(user_id, text)
 
 
-async def handle_help(user_id: int, vk_bot: VKBot):
+async def handle_help(user_id: int, vk_bot):
     """Справка"""
     text = (
         "🤖 <b>GWork HR Bot - Справка</b>\n\n"
         "<b>🔧 НАСТРОЙКА</b>\n"
-        "/onboarding - профиль компании\n"
-        "/new_job - новая вакансия\n"
-        "/filters - управление фильтрами\n\n"
+        "/onboarding — профиль компании\n"
+        "/new_job — новая вакансия\n"
+        "/filters — управление фильтрами\n\n"
         "<b>👥 КАНДИДАТЫ</b>\n"
-        "/candidates - список кандидатов\n"
-        "/analytics - аналитика\n\n"
-        "<b>🌐 ИСТОЧНИКИ</b>\n"
+        "/candidates — список кандидатов\n"
+        "/analytics — аналитика\n\n"
+        "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
         "🇭 HeadHunter | 🟢 SuperJob\n"
         "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
         "<b>🔍 ЖЁСТКИЕ ФИЛЬТРЫ</b>\n"
         "• Город должен совпадать\n"
-        "• Зарплата в пределах вилки\n"
+        "• Зарплата в пределах вилки +20%\n"
         "• Опыт (если требуется)\n"
-        "• Критичные требования\n\n"
+        "• Критичные требования\n"
+        "• Красные флаги — отсев подозрительных\n\n"
+        "<b>📈 ПРЕДКВАЛИФИКАЦИЯ</b>\n"
+        "• Анализ ответов кандидата\n"
+        "• Оценка по 4 критериям\n"
+        "• Автоматическое решение (вести/уточнить/не вести)\n\n"
         "По всем вопросам обращайтесь к администратору."
     )
     await vk_bot.send_message(user_id, text)
