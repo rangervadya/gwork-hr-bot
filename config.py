@@ -42,12 +42,12 @@ class Settings:
 
     # === VK (ВКОНТАКТЕ) ===
     vk_token: str = os.getenv("VK_TOKEN", "")
-    """Токен доступа к VK API для бота группы"""
+    """Токен доступа сообщества (создается в настройках группы ВК)"""
     
-    vk_group_id: int = int(os.getenv("VK_GROUP_ID", "0")) if os.getenv("VK_GROUP_ID", "").isdigit() else 0
-    """ID группы ВКонтакте (опционально)"""
+    vk_group_id_raw: str = os.getenv("VK_GROUP_ID", "")
+    """ID группы ВКонтакте (число, например 236770128)"""
     
-    vk_api_version: str = os.getenv("VK_API_VERSION", "5.131")
+    vk_api_version: str = os.getenv("VK_API_VERSION", "5.199")
     """Версия VK API"""
 
     # === ЯНДЕКС.КАЛЕНДАРЬ ===
@@ -55,7 +55,7 @@ class Settings:
     """Логин от Яндекса (полный email, например: user@yandex.ru)"""
     
     yandex_app_password: str = os.getenv("YANDEX_APP_PASSWORD", "")
-    """Пароль приложения, созданный в настройках Яндекса (формат: xxxx xxxx xxxx xxxx)"""
+    """Пароль приложения, созданный в настройках Яндекса"""
 
     # Интеграция с календарём
     calendar_webhook_url: str = os.getenv("CALENDAR_WEBHOOK_URL", "")
@@ -84,9 +84,19 @@ class Settings:
         }
 
     @property
+    def vk_group_id(self) -> int:
+        """Возвращает ID группы VK как целое число"""
+        if not self.vk_group_id_raw:
+            return 0
+        try:
+            return int(self.vk_group_id_raw.strip())
+        except ValueError:
+            return 0
+
+    @property
     def has_vk(self) -> bool:
         """Проверяет, настроен ли VK бот"""
-        return bool(self.vk_token)
+        return bool(self.vk_token) and self.vk_group_id > 0
 
 
 settings = Settings()
@@ -100,6 +110,7 @@ print(f"✅ SUPERJOB_API_KEY: {'установлен' if settings.superjob_api_k
 print(f"✅ HABR_CLIENT_ID: {'установлен' if settings.habr_client_id else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ DEEPSEEK_API_KEY: {'установлен' if settings.deepseek_api_key else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ VK_TOKEN: {'установлен' if settings.vk_token else 'НЕ УСТАНОВЛЕН'}")
+print(f"✅ VK_GROUP_ID: {settings.vk_group_id if settings.vk_group_id else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ YANDEX_APP_PASSWORD: {'установлен' if settings.yandex_app_password else 'НЕ УСТАНОВЛЕН'}")
 print(f"✅ SMTP: {'настроен' if settings.smtp_username and settings.smtp_password else 'НЕ НАСТРОЕН'}")
