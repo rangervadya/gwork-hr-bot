@@ -9,6 +9,7 @@ from db import get_session
 from models import Candidate, CandidateStatus, Company, Vacancy
 from filters import apply_hard_filters, extract_salary, extract_experience_years, normalize_city
 from pre_qualification import PreQualificationAnalyzer
+from vk_bot import vk_bot
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +28,25 @@ class VKUserState:
         self.page = 0      # pagination for candidates
 
 
-async def handle_vk_message(data: Dict[str, Any], vk_bot):
+async def handle_vk_message(data: Dict[str, Any]):
     """
     Главный обработчик сообщений от VK
     
     Args:
         data: Словарь с данными сообщения (user_id, text, payload, message)
-        vk_bot: Экземпляр VKBot для отправки сообщений
     """
     user_id = data['user_id']
     text = data['text'].strip()
     payload = data.get('payload')
     
     logger.info(f"📨 VK: {user_id} -> {text[:50]}")
+    
+    # Используем глобальный vk_bot
+    global vk_bot
+    
+    if not vk_bot:
+        logger.error("❌ vk_bot не инициализирован")
+        return
     
     # Получаем или создаём состояние пользователя
     if user_id not in user_states:
@@ -49,23 +56,24 @@ async def handle_vk_message(data: Dict[str, Any], vk_bot):
     # Проверяем, есть ли компания у пользователя
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == user_id).first()
-        
-        # Если нет компании и пользователь не в онбординге — предлагаем пройти
-        if not company and state.state != 'onboarding' and text not in ['/start', '/onboarding', 'start', 'начать']:
-            await vk_bot.send_message(
-                user_id,
-                "👋 Добро пожаловать в GWork HR Bot!\n\n"
-                "Для начала работы пройдите онбординг — настройте профиль компании.\n\n"
-                "Напишите: /onboarding"
-            )
-            return
     
-    # Обработка команд
+    # Обработка команды /start (в первую очередь)
     if text == '/start' or text == 'start' or text == 'начать':
         await handle_start(user_id, vk_bot, company)
         return
     
-    elif text == '/onboarding' or text == 'онбординг':
+    # Если нет компании и пользователь не в онбординге — предлагаем пройти
+    if not company and state.state != 'onboarding':
+        await vk_bot.send_message(
+            user_id,
+            "👋 Добро пожаловать в GWork HR Bot!\n\n"
+            "Для начала работы пройдите онбординг — настройте профиль компании.\n\n"
+            "Напишите: /onboarding"
+        )
+        return
+    
+    # Обработка остальных команд
+    if text == '/onboarding' or text == 'онбординг':
         await handle_onboarding_start(user_id, vk_bot, state)
         return
     
