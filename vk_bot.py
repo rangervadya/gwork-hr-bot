@@ -70,6 +70,8 @@ class VKBot:
             try:
                 self.longpoll = VkBotLongPoll(self.vk_session, self.group_id)
                 logger.info(f"✅ VK LongPoll успешно настроен для группы {self.group_id}")
+                logger.info(f"📊 LongPoll server: {self.longpoll.server}")
+                logger.info(f"📊 LongPoll key: {self.longpoll.key[:10] if self.longpoll.key else 'None'}...")
             except vk_api.exceptions.ApiError as e:
                 logger.error(f"❌ Ошибка VK API при настройке LongPoll: {e}")
                 if e.code == 100:
@@ -110,7 +112,6 @@ class VKBot:
             if keyboard:
                 params['keyboard'] = keyboard
             
-            # Важно: для токена сообщества метод тот же, но сообщение приходит от группы
             self.vk.messages.send(**params)
             logger.info(f"✅ Сообщение отправлено пользователю {user_id} от имени группы {self.group_id}")
             return True
@@ -165,13 +166,15 @@ class VKBot:
     
     async def process_event(self, event):
         """Обработка события VK"""
+        logger.info(f"📨 process_event: получен event типа {event.type}")
+        
         if event.type == VkBotEventType.MESSAGE_NEW:
             message = event.object.message
             user_id = message['from_id']
             text = message.get('text', '').strip()
             payload = message.get('payload')
             
-            logger.info(f"📨 VK сообщение от {user_id} в группу {self.group_id}: {text[:50]}...")
+            logger.info(f"📨 VK сообщение от {user_id} в группу {self.group_id}: текст = '{text}'")
             
             return {
                 'user_id': user_id,
@@ -181,6 +184,7 @@ class VKBot:
                 'handled': False
             }
         
+        logger.info(f"📨 Игнорируем событие типа: {event.type}")
         return None
     
     async def start_polling(self, message_handler=None):
@@ -195,22 +199,34 @@ class VKBot:
         
         self.running = True
         logger.info(f"🔄 VK LongPoll запущен для группы {self.group_id}, ожидание сообщений...")
+        logger.info(f"📊 LongPoll server: {self.longpoll.server}")
+        logger.info(f"📊 LongPoll key: {self.longpoll.key[:10] if self.longpoll.key else 'None'}...")
         
         try:
             for event in self.longpoll.listen():
+                logger.info(f"📨 Получено событие: type={event.type}")  # ← ВАЖНО: логируем каждое событие
+                
                 if not self.running:
                     break
                 
                 if event.type == VkBotEventType.MESSAGE_NEW:
+                    logger.info("📨 Это MESSAGE_NEW, обрабатываем...")
                     data = await self.process_event(event)
                     if message_handler and data:
                         try:
+                            logger.info("📨 Вызываем message_handler...")
                             await message_handler(data, self)
+                            logger.info("✅ message_handler выполнен")
                         except Exception as e:
                             logger.error(f"❌ Ошибка в обработчике: {e}")
+                            traceback.print_exc()
+                else:
+                    logger.info(f"📨 Игнорируем событие типа: {event.type}")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка в VK LongPoll: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(3)
         finally:
             self.running = False
             logger.info("🛑 VK LongPoll остановлен")
@@ -259,4 +275,5 @@ def init_vk_bot() -> Optional[VKBot]:
             return None
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации VK бота: {e}")
+        traceback.print_exc()
         return None
