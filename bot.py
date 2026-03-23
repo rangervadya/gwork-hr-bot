@@ -133,6 +133,20 @@ async def handle_vk_message(message_data: Dict[str, Any]):
         payload = message_data.get('payload')
         
         logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
+
+        # ВАЖНО: получаем актуальный экземпляр vk_bot
+        from vk_bot import vk_bot as vk_bot_instance
+        from vk_bot import init_vk_bot
+        
+        # Если vk_bot_instance None, пытаемся инициализировать заново
+        if vk_bot_instance is None:
+            logger.warning("⚠️ VK бот не инициализирован, пробуем инициализировать...")
+            init_vk_bot()
+            from vk_bot import vk_bot as vk_bot_instance
+        
+        if vk_bot_instance is None:
+            logger.error("❌ VK бот не инициализирован после повторной попытки")
+            return
         
         # ===== ОБРАБОТКА КОМАНДЫ /start =====
         if text == '/start' or text == 'start' or text == 'начать':
