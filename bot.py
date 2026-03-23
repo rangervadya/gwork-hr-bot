@@ -134,24 +134,20 @@ async def handle_vk_message(message_data: Dict[str, Any]):
         
         logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
 
-        # Импортируем vk_bot внутри функции, чтобы избежать циклического импорта
-        import sys
-        import importlib
-        
-        # Перезагружаем модуль, чтобы получить актуальный экземпляр
-        if 'vk_bot' in sys.modules:
-            importlib.reload(sys.modules['vk_bot'])
-        
+        # Импортируем и получаем vk_bot
         from vk_bot import vk_bot as vk_bot_instance
+        from vk_bot import init_vk_bot
         
+        # Если vk_bot_instance None, инициализируем и получаем заново
         if vk_bot_instance is None:
-            logger.error("❌ VK бот не инициализирован, пробуем инициализировать...")
-            from vk_bot import init_vk_bot
+            logger.warning("⚠️ VK бот не инициализирован, пробуем инициализировать...")
             init_vk_bot()
+            # ПОСЛЕ инициализации снова импортируем
             from vk_bot import vk_bot as vk_bot_instance
         
+        # Если всё ещё None — ошибка
         if vk_bot_instance is None:
-            logger.error("❌ VK бот не инициализирован, сообщение не будет отправлено")
+            logger.error("❌ VK бот не инициализирован")
             return
         
         # ===== ОБРАБОТКА КОМАНДЫ /start =====
