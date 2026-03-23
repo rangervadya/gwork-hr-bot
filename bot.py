@@ -134,6 +134,64 @@ async def handle_vk_message(message_data: Dict[str, Any]):
         
         logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
         
+        # ===== ОБРАБОТКА КОМАНДЫ /start =====
+        if text == '/start' or text == 'start' or text == 'начать':
+            logger.info(f"📨 VK: получена команда /start от {user_id}")
+            with get_session() as session:
+                company = session.query(Company).filter(Company.owner_id == user_id).first()
+            
+            if vk_bot:
+                if company:
+                    welcome_text = (
+                        f"👋 <b>С возвращением, {company.name_and_industry}!</b>\n\n"
+                        f"📍 {company.location}\n"
+                        f"📅 {company.schedule}\n"
+                        f"💰 {company.salary_range}\n\n"
+                        f"<b>Доступные команды:</b>\n"
+                        f"/new_job — создать новую вакансию\n"
+                        f"/candidates — список кандидатов\n"
+                        f"/filters — управление фильтрами\n"
+                        f"/analytics — аналитика по вакансии\n"
+                        f"/help — справка"
+                    )
+                else:
+                    welcome_text = (
+                        "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
+                        "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
+                        "🔍 <b>Что я умею:</b>\n"
+                        "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
+                        "• Автоматически проверяю резюме на соответствие требованиям\n"
+                        "• Общаюсь с кандидатами и провожу предквалификацию\n"
+                        "• Назначаю собеседования и отправляю приглашения\n\n"
+                        "📋 <b>Как создать вакансию:</b>\n"
+                        "1. Напишите /new_job\n"
+                        "2. Укажите роль и город\n"
+                        "3. Задайте параметры поиска\n\n"
+                        "После создания вакансии я начну поиск кандидатов и пришлю результаты сюда!\n\n"
+                        "Для начала работы напишите /onboarding"
+                    )
+                await vk_bot.send_message(user_id, welcome_text)
+            return
+        
+        # ===== ОБРАБОТКА КОМАНДЫ /help =====
+        if text == '/help' or text == 'help' or text == 'помощь':
+            help_text = (
+                "🤖 <b>GWork HR Bot - Справка</b>\n\n"
+                "<b>🔧 НАСТРОЙКА</b>\n"
+                "/onboarding — профиль компании\n"
+                "/new_job — новая вакансия\n"
+                "/filters — управление фильтрами\n\n"
+                "<b>👥 КАНДИДАТЫ</b>\n"
+                "/candidates — список кандидатов\n"
+                "/analytics — аналитика\n\n"
+                "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
+                "🇭 HeadHunter | 🟢 SuperJob\n"
+                "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
+                "По всем вопросам обращайтесь к администратору."
+            )
+            if vk_bot:
+                await vk_bot.send_message(user_id, help_text)
+            return
         # Ищем кандидата по VK ID в контактах
         with get_session() as session:
             # Ищем кандидата, у которого контакт содержит этот VK ID
