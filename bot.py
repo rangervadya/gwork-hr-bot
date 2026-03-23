@@ -198,7 +198,7 @@ async def handle_vk_message(message_data: Dict[str, Any]):
             logger.info(f"📨 VK: вызываю vk_bot.send_message({user_id}, ...)")
             
             try:
-                result = await vk_bot.send_message(user_id, welcome_text)
+                result = await vk_bot_instance.send_message(user_id, welcome_text)
                 logger.info(f"📨 VK: результат отправки: {result}")
                 if result:
                     logger.info(f"✅ VK: сообщение успешно отправлено пользователю {user_id}")
