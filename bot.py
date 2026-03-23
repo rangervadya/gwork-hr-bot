@@ -136,42 +136,62 @@ async def handle_vk_message(message_data: Dict[str, Any]):
         
         # ===== ОБРАБОТКА КОМАНДЫ /start =====
         if text == '/start' or text == 'start' or text == 'начать':
-            logger.info(f"📨 VK: получена команда /start от {user_id}")
-            with get_session() as session:
-                company = session.query(Company).filter(Company.owner_id == user_id).first()
-            
-            if vk_bot:
-                if company:
-                    welcome_text = (
-                        f"👋 <b>С возвращением, {company.name_and_industry}!</b>\n\n"
-                        f"📍 {company.location}\n"
-                        f"📅 {company.schedule}\n"
-                        f"💰 {company.salary_range}\n\n"
-                        f"<b>Доступные команды:</b>\n"
-                        f"/new_job — создать новую вакансию\n"
-                        f"/candidates — список кандидатов\n"
-                        f"/filters — управление фильтрами\n"
-                        f"/analytics — аналитика по вакансии\n"
-                        f"/help — справка"
-                    )
-                else:
-                    welcome_text = (
-                        "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
-                        "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
-                        "🔍 <b>Что я умею:</b>\n"
-                        "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
-                        "• Автоматически проверяю резюме на соответствие требованиям\n"
-                        "• Общаюсь с кандидатами и провожу предквалификацию\n"
-                        "• Назначаю собеседования и отправляю приглашения\n\n"
-                        "📋 <b>Как создать вакансию:</b>\n"
-                        "1. Напишите /new_job\n"
-                        "2. Укажите роль и город\n"
-                        "3. Задайте параметры поиска\n\n"
-                        "После создания вакансии я начну поиск кандидатов и пришлю результаты сюда!\n\n"
-                        "Для начала работы напишите /onboarding"
-                    )
-                await vk_bot.send_message(user_id, welcome_text)
-            return
+    logger.info(f"📨 VK: получена команда /start от {user_id}")
+    with get_session() as session:
+        company = session.query(Company).filter(Company.owner_id == user_id).first()
+        logger.info(f"📨 VK: компания найдена: {company is not None}")
+    
+    if vk_bot:
+        logger.info(f"📨 VK: vk_bot существует, отправляю сообщение...")
+        
+        if company:
+            welcome_text = (
+                f"👋 <b>С возвращением, {company.name_and_industry}!</b>\n\n"
+                f"📍 {company.location}\n"
+                f"📅 {company.schedule}\n"
+                f"💰 {company.salary_range}\n\n"
+                f"<b>Доступные команды:</b>\n"
+                f"/new_job — создать новую вакансию\n"
+                f"/candidates — список кандидатов\n"
+                f"/filters — управление фильтрами\n"
+                f"/analytics — аналитика по вакансии\n"
+                f"/help — справка"
+            )
+        else:
+            welcome_text = (
+                "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
+                "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
+                "🔍 <b>Что я умею:</b>\n"
+                "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
+                "• Автоматически проверяю резюме на соответствие требованиям\n"
+                "• Общаюсь с кандидатами и провожу предквалификацию\n"
+                "• Назначаю собеседования и отправляю приглашения\n\n"
+                "📋 <b>Как создать вакансию:</b>\n"
+                "1. Напишите /new_job\n"
+                "2. Укажите роль и город\n"
+                "3. Задайте параметры поиска\n\n"
+                "После создания вакансии я начну поиск кандидатов и пришлю результаты сюда!\n\n"
+                "Для начала работы напишите /onboarding"
+            )
+        
+        logger.info(f"📨 VK: текст сообщения готов, длина: {len(welcome_text)}")
+        logger.info(f"📨 VK: вызываю vk_bot.send_message({user_id}, ...)")
+        
+        try:
+            result = await vk_bot.send_message(user_id, welcome_text)
+            logger.info(f"📨 VK: результат отправки: {result}")
+            if result:
+                logger.info(f"✅ VK: сообщение успешно отправлено пользователю {user_id}")
+            else:
+                logger.error(f"❌ VK: send_message вернул False")
+        except Exception as e:
+            logger.error(f"❌ VK: ошибка при отправке: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        logger.error("❌ VK: vk_bot не инициализирован!")
+    
+    return
         
         # ===== ОБРАБОТКА КОМАНДЫ /help =====
         if text == '/help' or text == 'help' or text == 'помощь':
