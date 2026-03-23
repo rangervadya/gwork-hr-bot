@@ -129,23 +129,22 @@ async def handle_vk_message(message_data: Dict[str, Any]):
     """
     try:
         user_id = message_data['user_id']
-        text = message_data['text']
+        text = message_data['text'].strip()
         payload = message_data.get('payload')
         
         logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
-
-        # Импортируем и получаем vk_bot
-        from vk_bot import vk_bot as vk_bot_instance
-        from vk_bot import init_vk_bot
         
-        # Если vk_bot_instance None, инициализируем и получаем заново
-        if vk_bot_instance is None:
+        # Импортируем модуль и получаем глобальную переменную
+        import vk_bot as vk_module
+        
+        # Если vk_module.vk_bot None, инициализируем
+        if vk_module.vk_bot is None:
             logger.warning("⚠️ VK бот не инициализирован, пробуем инициализировать...")
-            init_vk_bot()
-            # ПОСЛЕ инициализации снова импортируем
-            from vk_bot import vk_bot as vk_bot_instance
+            vk_module.init_vk_bot()
         
-        # Если всё ещё None — ошибка
+        # Получаем экземпляр после инициализации
+        vk_bot_instance = vk_module.vk_bot
+        
         if vk_bot_instance is None:
             logger.error("❌ VK бот не инициализирован")
             return
@@ -156,10 +155,7 @@ async def handle_vk_message(message_data: Dict[str, Any]):
             with get_session() as session:
                 company = session.query(Company).filter(Company.owner_id == user_id).first()
                 logger.info(f"📨 VK: компания найдена: {company is not None}")
-    
-            if vk_bot:
-                logger.info(f"📨 VK: vk_bot существует, отправляю сообщение...")
-        
+            
             if company:
                 welcome_text = (
                     f"👋 <b>С возвращением, {company.name_and_industry}!</b>\n\n"
@@ -191,7 +187,7 @@ async def handle_vk_message(message_data: Dict[str, Any]):
                 )
             
             logger.info(f"📨 VK: текст сообщения готов, длина: {len(welcome_text)}")
-            logger.info(f"📨 VK: вызываю vk_bot.send_message({user_id}, ...)")
+            logger.info(f"📨 VK: вызываю vk_bot_instance.send_message({user_id}, ...)")
             
             try:
                 result = await vk_bot_instance.send_message(user_id, welcome_text)
@@ -204,10 +200,80 @@ async def handle_vk_message(message_data: Dict[str, Any]):
                 logger.error(f"❌ VK: ошибка при отправке: {e}")
                 import traceback
                 traceback.print_exc()
-        else:
-            logger.error("❌ VK: vk_bot не инициализирован!")
+            return
         
-        return
+        # ===== ОБРАБОТКА КОМАНДЫ /onboarding =====
+        if text == '/onboarding' or text == 'онбординг':
+            logger.info(f"📨 VK: получена команда /onboarding от {user_id}")
+            await vk_bot_instance.send_message(
+                user_id,
+                "📝 <b>Настройка профиля компании доступна только в Telegram боте.</b>\n\n"
+                "Пожалуйста, перейдите в Telegram: @goodWorkingBot\n\n"
+                "Там вы сможете:\n"
+                "• Создать профиль компании\n"
+                "• Настроить фильтры\n"
+                "• Создать вакансию\n"
+                "• Просматривать кандидатов\n\n"
+                "Спасибо за понимание!"
+            )
+            return
+        
+        # ===== ОБРАБОТКА КОМАНДЫ /help =====
+        if text == '/help' or text == 'help' or text == 'помощь':
+            help_text = (
+                "🤖 <b>GWork HR Bot - Справка</b>\n\n"
+                "<b>🔧 НАСТРОЙКА (только в Telegram)</b>\n"
+                "/onboarding — профиль компании\n"
+                "/new_job — новая вакансия\n"
+                "/filters — управление фильтрами\n\n"
+                "<b>👥 КАНДИДАТЫ (только в Telegram)</b>\n"
+                "/candidates — список кандидатов\n"
+                "/analytics — аналитика\n\n"
+                "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
+                "🇭 HeadHunter | 🟢 SuperJob\n"
+                "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
+                "Для полного функционала используйте Telegram бота: @goodWorkingBot\n\n"
+                "По всем вопросам обращайтесь к администратору."
+            )
+            await vk_bot_instance.send_message(user_id, help_text)
+            return
+        
+        # ===== ОБРАБОТКА СООБЩЕНИЙ ОТ КАНДИДАТОВ =====
+        with get_session() as session:
+            candidates = session.query(Candidate).filter(
+                Candidate.contact.like(f"%{user_id}%")
+            ).all()
+            
+            if not candidates:
+                logger.info(f"Кандидат с VK ID {user_id} не найден")
+                return
+            
+            candidate = candidates[0]
+            
+            if candidate.status == CandidateStatus.REJECTED.value:
+                return
+            
+            vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
+            company = session.query(Company).filter(Company.id == vacancy.company_id).first()
+            
+            if not vacancy or not company:
+                return
+            
+            candidate.last_reply = text[:500]
+            candidate.last_reply_at = datetime.now()
+            candidate.last_activity_at = datetime.now()
+            
+            session.commit()
+            
+            await vk_bot_instance.send_message(
+                user_id,
+                "✅ Спасибо за ответ! Ваше сообщение получено."
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
+        import traceback
+        traceback.print_exc()
         
         # ===== ОБРАБОТКА КОМАНДЫ /help =====
         if text == '/help' or text == 'help' or text == 'помощь':
