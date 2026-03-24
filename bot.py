@@ -125,9 +125,12 @@ async def send_vk_message_to_candidate(candidate: Candidate, message_text: str) 
 
 async def handle_vk_message(message_data: Dict[str, Any]):
     """
-    Обрабатывает сообщение из VK
+    Обрабатывает сообщение из VK — передаём в vk_handlers
     """
     try:
+        # Получаем text из message_data
+        text = message_data.get('text', '').strip()
+        
         from vk_handlers import handle_vk_message as vk_handler
         
         # Импортируем модуль vk_bot для получения экземпляра
@@ -142,7 +145,7 @@ async def handle_vk_message(message_data: Dict[str, Any]):
             logger.error("❌ VK бот не инициализирован")
             return
         
-        # Передаём данные в обработчик (он уже использует глобальный vk_bot)
+        # Передаём данные в обработчик
         await vk_handler(message_data)
         
     except Exception as e:
