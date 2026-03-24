@@ -128,26 +128,27 @@ async def handle_vk_message(message_data: Dict[str, Any]):
     Обрабатывает сообщение из VK
     """
     try:
-        user_id = message_data['user_id']
-        text = message_data['text'].strip()
-        payload = message_data.get('payload')
+        from vk_handlers import handle_vk_message as vk_handler
         
-        logger.info(f"📨 Обработка VK сообщения от {user_id}: {text[:50]}...")
-        
-        # Импортируем модуль и получаем глобальную переменную
+        # Импортируем модуль vk_bot для получения экземпляра
         import vk_bot as vk_module
         
-        # Если vk_module.vk_bot None, инициализируем
+        # Проверяем и инициализируем VK бота если нужно
         if vk_module.vk_bot is None:
             logger.warning("⚠️ VK бот не инициализирован, пробуем инициализировать...")
             vk_module.init_vk_bot()
         
-        # Получаем экземпляр после инициализации
-        vk_bot_instance = vk_module.vk_bot
-        
-        if vk_bot_instance is None:
+        if vk_module.vk_bot is None:
             logger.error("❌ VK бот не инициализирован")
             return
+        
+        # Передаём данные в обработчик (он уже использует глобальный vk_bot)
+        await vk_handler(message_data)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
+        import traceback
+        traceback.print_exc()
         
         # ===== ОБРАБОТКА КОМАНДЫ /start =====
         if text == '/start' or text == 'start' or text == 'начать':
