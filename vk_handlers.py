@@ -79,7 +79,7 @@ async def handle_vk_message(data: Dict[str, Any]):
     elif state.state == 'new_job':
         await handle_new_job_step(user_id, vk_bot, state, text)
     else:
-        await vk_bot.send_message(
+        vk_bot.send_message(
             user_id,
             "❓ Неизвестная команда.\n\n"
             "Доступные команды:\n"
@@ -122,7 +122,7 @@ async def handle_start(user_id: int, vk_bot, company):
             "3. Задайте параметры поиска\n\n"
             "Для начала работы напишите /onboarding"
         )
-    await vk_bot.send_message(user_id, text)
+    vk_bot.send_message(user_id, text)
 
 
 async def handle_onboarding_start(user_id: int, vk_bot, state):
@@ -131,7 +131,7 @@ async def handle_onboarding_start(user_id: int, vk_bot, state):
     state.data = {}
     state.step = 1
     
-    await vk_bot.send_message(
+    vk_bot.send_message(
         user_id,
         "📝 <b>Расскажите о компании:</b>\n\n"
         "Название и сфера деятельности.\n"
@@ -146,22 +146,22 @@ async def handle_onboarding_step(user_id: int, vk_bot, state, text: str):
     if step == 1:
         state.data['name'] = text
         state.step = 2
-        await vk_bot.send_message(user_id, "📍 <b>Где находитесь?</b>\n\nГород и район.")
+        vk_bot.send_message(user_id, "📍 <b>Где находитесь?</b>\n\nГород и район.")
     
     elif step == 2:
         state.data['location'] = text
         state.step = 3
-        await vk_bot.send_message(user_id, "📅 <b>График работы:</b>\n\nНапример: 2/2 с 10:00 до 22:00")
+        vk_bot.send_message(user_id, "📅 <b>График работы:</b>\n\nНапример: 2/2 с 10:00 до 22:00")
     
     elif step == 3:
         state.data['schedule'] = text
         state.step = 4
-        await vk_bot.send_message(user_id, "💰 <b>Зарплатная вилка:</b>\n\nНапример: от 40 000 до 60 000")
+        vk_bot.send_message(user_id, "💰 <b>Зарплатная вилка:</b>\n\nНапример: от 40 000 до 60 000")
     
     elif step == 4:
         state.data['salary'] = text
         state.step = 5
-        await vk_bot.send_message(user_id, "🎭 <b>Тон общения:</b>\n\nстрогий, дружелюбный или нейтральный")
+        vk_bot.send_message(user_id, "🎭 <b>Тон общения:</b>\n\nстрогий, дружелюбный или нейтральный")
     
     elif step == 5:
         state.data['tone'] = text
@@ -184,7 +184,7 @@ async def handle_onboarding_step(user_id: int, vk_bot, state, text: str):
         state.data = {}
         state.step = 0
         
-        await vk_bot.send_message(
+        vk_bot.send_message(
             user_id,
             "✅ <b>Профиль компании сохранён!</b>\n\n"
             "Теперь создайте вакансию: /new_job"
@@ -196,54 +196,54 @@ async def handle_new_job_start(user_id: int, vk_bot, state):
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == user_id).first()
         if not company:
-            await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
+            vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
             return
     
     state.state = 'new_job'
     state.data = {}
     state.step = 1
     
-    await vk_bot.send_message(
+    vk_bot.send_message(
         user_id,
         "🔍 <b>Кого ищем?</b>\n\nОпишите роль:\nНапример: Администратор"
     )
 
 
 async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
-    """Шаги создания вакансии (упрощённо)"""
+    """Шаги создания вакансии"""
     step = state.step
     
     if step == 1:
         state.data['role'] = text
         state.step = 2
-        await vk_bot.send_message(user_id, "🌆 <b>Город поиска:</b>\n\nНапример: Москва")
+        vk_bot.send_message(user_id, "🌆 <b>Город поиска:</b>\n\nНапример: Москва")
     
     elif step == 2:
         state.data['city'] = text
         state.step = 3
-        await vk_bot.send_message(user_id, "📅 <b>График работы:</b>\n\nНапример: 5/2")
+        vk_bot.send_message(user_id, "📅 <b>График работы:</b>\n\nНапример: 5/2")
     
     elif step == 3:
         state.data['schedule'] = text
         state.step = 4
-        await vk_bot.send_message(user_id, "💰 <b>Зарплата ОТ (число или '-'):</b>")
+        vk_bot.send_message(user_id, "💰 <b>Зарплата ОТ (число или '-'):</b>")
     
     elif step == 4:
         salary_from = None if text == '-' else int(text) if text.isdigit() else None
         state.data['salary_from'] = salary_from
         state.step = 5
-        await vk_bot.send_message(user_id, "💰 <b>Зарплата ДО (число или '-'):</b>")
+        vk_bot.send_message(user_id, "💰 <b>Зарплата ДО (число или '-'):</b>")
     
     elif step == 5:
         salary_to = None if text == '-' else int(text) if text.isdigit() else None
         state.data['salary_to'] = salary_to
         state.step = 6
-        await vk_bot.send_message(user_id, "⏰ <b>Когда нужен сотрудник?</b>")
+        vk_bot.send_message(user_id, "⏰ <b>Когда нужен сотрудник?</b>")
     
     elif step == 6:
         state.data['start_when'] = text
         state.step = 7
-        await vk_bot.send_message(user_id, "⚠️ <b>Критичные требования (или '-'):</b>")
+        vk_bot.send_message(user_id, "⚠️ <b>Критичные требования (или '-'):</b>")
     
     elif step == 7:
         must_have = '-' if text == '-' else text
@@ -269,7 +269,7 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         state.data = {}
         state.step = 0
         
-        await vk_bot.send_message(
+        vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
             f"Ищу кандидатов...\n"
@@ -280,44 +280,22 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
-async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
-    """Поиск кандидатов и уведомление"""
-    from bot import gather_real_candidates
-    
-    await vk_bot.send_message(user_id, "🔍 Поиск кандидатов... Это может занять несколько минут.")
-    
-    try:
-        await gather_real_candidates(vacancy_id)
-        
-        with get_session() as session:
-            count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
-        
-        await vk_bot.send_message(
-            user_id,
-            f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
-            f"Посмотреть кандидатов: /candidates"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка поиска: {e}")
-        await vk_bot.send_message(user_id, f"❌ Ошибка поиска: {e}")
-
-
 async def handle_candidates(user_id: int, vk_bot, company, state):
     """Показ списка кандидатов"""
     if not company:
-        await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
+        vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
         return
     
     with get_session() as session:
         vacancy = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).first()
         if not vacancy:
-            await vk_bot.send_message(user_id, "📭 Нет вакансий. Создайте: /new_job")
+            vk_bot.send_message(user_id, "📭 Нет вакансий. Создайте: /new_job")
             return
         
         candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).order_by(Candidate.score.desc()).all()
         
         if not candidates:
-            await vk_bot.send_message(user_id, "📭 Кандидаты не найдены")
+            vk_bot.send_message(user_id, "📭 Кандидаты не найдены")
             return
         
         text = f"📊 <b>Вакансия: {vacancy.role} ({vacancy.city})</b>\n\nВсего кандидатов: {len(candidates)}\n\n"
@@ -328,13 +306,13 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
         if len(candidates) > 5:
             text += f"\n... и ещё {len(candidates) - 5} кандидатов"
         
-        await vk_bot.send_message(user_id, text)
+        vk_bot.send_message(user_id, text)
 
 
 async def handle_filters(user_id: int, vk_bot, company):
     """Управление фильтрами"""
     if not company:
-        await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
+        vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
         return
     
     filters = getattr(company, 'filters_settings', {})
@@ -347,19 +325,19 @@ async def handle_filters(user_id: int, vk_bot, company):
         f"📋 Требования: {'✅' if filters.get('skills', True) else '❌'}\n\n"
         f"Для изменения используйте Telegram бота @goodWorkingBot"
     )
-    await vk_bot.send_message(user_id, text)
+    vk_bot.send_message(user_id, text)
 
 
 async def handle_analytics(user_id: int, vk_bot, company):
     """Аналитика"""
     if not company:
-        await vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
+        vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
         return
     
     with get_session() as session:
         vacancy = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).first()
         if not vacancy:
-            await vk_bot.send_message(user_id, "📭 Нет вакансий")
+            vk_bot.send_message(user_id, "📭 Нет вакансий")
             return
         
         candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).all()
@@ -374,7 +352,7 @@ async def handle_analytics(user_id: int, vk_bot, company):
             f"✅ Квалифицированы: {sum(1 for c in candidates if c.status == 'qualified')}\n"
             f"❌ Отсеяно: {sum(1 for c in candidates if c.status == 'rejected')}\n"
         )
-        await vk_bot.send_message(user_id, text)
+        vk_bot.send_message(user_id, text)
 
 
 async def handle_help(user_id: int, vk_bot):
@@ -393,4 +371,26 @@ async def handle_help(user_id: int, vk_bot):
         "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
         "По всем вопросам обращайтесь к администратору."
     )
-    await vk_bot.send_message(user_id, text)
+    vk_bot.send_message(user_id, text)
+
+
+async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
+    """Поиск кандидатов и уведомление"""
+    from bot import gather_real_candidates
+    
+    vk_bot.send_message(user_id, "🔍 Поиск кандидатов... Это может занять несколько минут.")
+    
+    try:
+        await gather_real_candidates(vacancy_id)
+        
+        with get_session() as session:
+            count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
+        
+        vk_bot.send_message(
+            user_id,
+            f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
+            f"Посмотреть кандидатов: /candidates"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {e}")
+        vk_bot.send_message(user_id, f"❌ Ошибка поиска: {e}")
