@@ -272,19 +272,21 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
-            f"🔍 Начинаю поиск кандидатов... Это может занять 1-3 минуты.\n"
+            f"🔍 Начинаю поиск кандидатов в HeadHunter, SuperJob и других источниках...\n"
+            f"Это может занять 1-3 минуты.\n\n"
             f"После завершения поиска используйте /candidates"
         )
         
-        # ЗАПУСКАЕМ ПОИСК КАНДИДАТОВ
+        # ЗАПУСКАЕМ РЕАЛЬНЫЙ ПОИСК КАНДИДАТОВ
         from bot import gather_real_candidates
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
 async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
-    """Поиск кандидатов и уведомление"""
+    """Поиск реальных кандидатов и уведомление"""
     from bot import gather_real_candidates
     
+    logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
     vk_bot.send_message(user_id, "🔍 Поиск кандидатов... Это может занять несколько минут.")
     
     try:
@@ -293,14 +295,32 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
         
+        logger.info(f"✅ ПОИСК ЗАВЕРШЁН. Найдено кандидатов: {count}")
+        
+        if count > 0:
+            vk_bot.send_message(
+                user_id,
+                f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
+                f"Посмотреть кандидатов: /candidates"
+            )
+        else:
+            vk_bot.send_message(
+                user_id,
+                f"⚠️ Поиск завершён, но кандидаты не найдены.\n\n"
+                f"Возможные причины:\n"
+                f"• Нет токенов HeadHunter или SuperJob\n"
+                f"• Нет подходящих резюме в выбранном городе\n"
+                f"• Ошибки в API (проверьте логи Render)"
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска: {e}")
+        import traceback
+        traceback.print_exc()
         vk_bot.send_message(
             user_id,
-            f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
-            f"Посмотреть кандидатов: /candidates"
+            f"❌ Ошибка при поиске кандидатов: {str(e)[:200]}\n\n"
+            f"Проверьте логи Render для деталей."
         )
-    except Exception as e:
-        logger.error(f"Ошибка поиска: {e}")
-        vk_bot.send_message(user_id, f"❌ Ошибка поиска: {e}")
 
 
 async def handle_candidates(user_id: int, vk_bot, company, state):
@@ -318,22 +338,28 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
         candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).order_by(Candidate.score.desc()).all()
         
         if not candidates:
-            vk_bot.send_message(user_id, "📭 Кандидаты не найдены")
+            vk_bot.send_message(
+                user_id,
+                "📭 Кандидаты не найдены.\n\n"
+                "Возможно, поиск ещё не завершён или не запущен.\n"
+                "Проверьте, что вы создали вакансию через /new_job\n"
+                "и подождите 1-3 минуты после создания."
+            )
             return
         
-        # Формируем список кандидатов с пагинацией
-        page = state.page
-        per_page = 3
-        total = len(candidates)
-        total_pages = (total + per_page - 1) // per_page
-        start = page * per_page
-        end = min(start + per_page, total)
-        
+        # Формируем список кандидатов
         text = f"📊 <b>Вакансия: {vacancy.role} ({vacancy.city})</b>\n\n"
-        text += f"Всего кандидатов: {total}\n"
-        text += f"Страница {page + 1} из {total_pages}\n\n"
+        text += f"Найдено кандидатов: {len(candidates)}\n\n"
         
-        for i, c in enumerate(candidates[start:end], start + 1):
+        for i, c in enumerate(candidates[:10], 1):
+            source_emoji = {
+                'hh': '🇭',
+                'superjob': '🟢',
+                'habr': '👨‍💻',
+                'trudvsem': '🏢',
+                'telegram': '✈️'
+            }.get(c.source, '📌')
+            
             status_emoji = {
                 'found': '🔍',
                 'filtered': '🟢',
@@ -343,26 +369,14 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
                 'rejected': '❌'
             }.get(c.status, '📌')
             
-            text += f"{i}. {status_emoji} <b>{c.name_or_nick}</b> — {c.score}/100\n"
-            text += f"   📍 {c.city} | 💼 {c.experience_text[:50]}\n"
-            text += f"   📊 Статус: {c.status}\n\n"
+            text += f"{i}. {source_emoji} <b>{c.name_or_nick}</b>\n"
+            text += f"   📍 {c.city} | 💼 {c.experience_text[:60]}\n"
+            text += f"   📊 Оценка: {c.score}/100 | {status_emoji} {c.status}\n\n"
+        
+        if len(candidates) > 10:
+            text += f"\n... и ещё {len(candidates) - 10} кандидатов"
         
         vk_bot.send_message(user_id, text)
-        
-        # Кнопки навигации
-        if total_pages > 1:
-            keyboard = {
-                'inline': True,
-                'buttons': []
-            }
-            nav_buttons = []
-            if page > 0:
-                nav_buttons.append({'action': {'type': 'text', 'label': '◀ Назад', 'payload': f'{{"action": "candidates_page", "page": {page - 1}}}'}})
-            if page < total_pages - 1:
-                nav_buttons.append({'action': {'type': 'text', 'label': 'Вперед ▶', 'payload': f'{{"action": "candidates_page", "page": {page + 1}}}'}})
-            if nav_buttons:
-                keyboard['buttons'] = [nav_buttons]
-                vk_bot.send_message(user_id, "📌 Навигация:", keyboard)
 
 
 async def handle_filters(user_id: int, vk_bot, company):
@@ -399,26 +413,29 @@ async def handle_analytics(user_id: int, vk_bot, company):
         candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).all()
         total = len(candidates)
         
-        status_counts = {
-            'found': 0,
-            'filtered': 0,
-            'invited': 0,
-            'qualified': 0,
-            'rejected': 0
-        }
+        status_counts = {}
+        source_counts = {}
         
         for c in candidates:
-            if c.status in status_counts:
-                status_counts[c.status] += 1
+            status_counts[c.status] = status_counts.get(c.status, 0) + 1
+            source_counts[c.source] = source_counts.get(c.source, 0) + 1
         
         text = (
             f"📊 <b>Аналитика: {vacancy.role}</b>\n\n"
-            f"Всего кандидатов: {total}\n"
-            f"🔍 Найдено: {status_counts['found']}\n"
-            f"🟢 Подходят: {status_counts['filtered']}\n"
-            f"📩 Приглашены: {status_counts['invited']}\n"
-            f"✅ Квалифицированы: {status_counts['qualified']}\n"
-            f"❌ Отсеяно: {status_counts['rejected']}\n"
+            f"Всего кандидатов: {total}\n\n"
+            f"<b>По статусам:</b>\n"
+            f"🔍 Найдено: {status_counts.get('found', 0)}\n"
+            f"🟢 Подходят: {status_counts.get('filtered', 0)}\n"
+            f"📩 Приглашены: {status_counts.get('invited', 0)}\n"
+            f"✅ Квалифицированы: {status_counts.get('qualified', 0)}\n"
+            f"📅 Собеседование: {status_counts.get('interview', 0)}\n"
+            f"❌ Отсеяно: {status_counts.get('rejected', 0)}\n\n"
+            f"<b>По источникам:</b>\n"
+            f"🇭 HeadHunter: {source_counts.get('hh', 0)}\n"
+            f"🟢 SuperJob: {source_counts.get('superjob', 0)}\n"
+            f"👨‍💻 Habr: {source_counts.get('habr', 0)}\n"
+            f"🏢 Trudvsem: {source_counts.get('trudvsem', 0)}\n"
+            f"✈️ Telegram: {source_counts.get('telegram', 0)}"
         )
         vk_bot.send_message(user_id, text)
 
