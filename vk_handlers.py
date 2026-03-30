@@ -1,6 +1,8 @@
 # vk_handlers.py - Полноценный обработчик команд для VK бота
 import asyncio
 import logging
+import sys
+import importlib
 from datetime import datetime
 from typing import Dict, Any
 
@@ -278,24 +280,29 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         )
         
         # ЗАПУСКАЕМ РЕАЛЬНЫЙ ПОИСК КАНДИДАТОВ
-        from bot import gather_real_candidates
+        logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
 async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     """Поиск реальных кандидатов и уведомление"""
-    from bot import gather_real_candidates
-    
-    logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
-    vk_bot.send_message(user_id, "🔍 Поиск кандидатов... Это может занять несколько минут.")
+    logger.info(f"🔍 search_and_notify: начат поиск для вакансии {vacancy_id}")
     
     try:
+        # Принудительно перезагружаем модуль bot
+        if 'bot' in sys.modules:
+            importlib.reload(sys.modules['bot'])
+        
+        from bot import gather_real_candidates
+        
+        logger.info(f"🔍 Вызываю gather_real_candidates({vacancy_id})...")
         await gather_real_candidates(vacancy_id)
+        logger.info(f"✅ gather_real_candidates завершён")
         
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
         
-        logger.info(f"✅ ПОИСК ЗАВЕРШЁН. Найдено кандидатов: {count}")
+        logger.info(f"✅ Найдено кандидатов: {count}")
         
         if count > 0:
             vk_bot.send_message(
@@ -308,7 +315,7 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 user_id,
                 f"⚠️ Поиск завершён, но кандидаты не найдены.\n\n"
                 f"Возможные причины:\n"
-                f"• Нет токенов HeadHunter или SuperJob\n"
+                f"• Нет токенов HeadHunter или SuperJob в настройках\n"
                 f"• Нет подходящих резюме в выбранном городе\n"
                 f"• Ошибки в API (проверьте логи Render)"
             )
