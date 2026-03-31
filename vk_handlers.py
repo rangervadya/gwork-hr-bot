@@ -25,6 +25,7 @@ class VKUserState:
         self.step = 0
         self.vacancy_id = None
         self.page = 0
+        self.last_candidate_id = None
 
 
 async def handle_vk_message(data: Dict[str, Any]):
@@ -46,7 +47,32 @@ async def handle_vk_message(data: Dict[str, Any]):
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == user_id).first()
     
-    # Обработка команд
+    # Обработка команд с параметрами
+    if text.startswith('/invite_'):
+        candidate_id = text.replace('/invite_', '').strip()
+        if candidate_id.isdigit():
+            await handle_invite(user_id, vk_bot, int(candidate_id))
+            return
+    
+    if text.startswith('/skip_'):
+        candidate_id = text.replace('/skip_', '').strip()
+        if candidate_id.isdigit():
+            await handle_skip(user_id, vk_bot, int(candidate_id), state)
+            return
+    
+    if text.startswith('/fav_'):
+        candidate_id = text.replace('/fav_', '').strip()
+        if candidate_id.isdigit():
+            await handle_fav(user_id, vk_bot, int(candidate_id))
+            return
+    
+    if text.startswith('/ask_'):
+        candidate_id = text.replace('/ask_', '').strip()
+        if candidate_id.isdigit():
+            await handle_ask(user_id, vk_bot, int(candidate_id))
+            return
+    
+    # Обработка основных команд
     if text == '/start' or text == 'start' or text == 'начать':
         await handle_start(user_id, vk_bot, company)
         return
@@ -90,7 +116,12 @@ async def handle_vk_message(data: Dict[str, Any]):
             "/candidates — список кандидатов\n"
             "/filters — управление фильтрами\n"
             "/analytics — аналитика\n"
-            "/help — справка"
+            "/help — справка\n\n"
+            "Для действий с кандидатами:\n"
+            "/invite_<id> — пригласить\n"
+            "/skip_<id> — пропустить\n"
+            "/fav_<id> — в избранное\n"
+            "/ask_<id> — задать вопрос"
         )
 
 
@@ -277,18 +308,13 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
-            f"🔍 Начинаю поиск кандидатов в HeadHunter, SuperJob и других источниках...\n"
+            f"🔍 Начинаю поиск кандидатов...\n"
             f"Это может занять 1-3 минуты.\n\n"
             f"После завершения поиска используйте /candidates"
         )
         
-        # ЗАПУСКАЕМ ПОИСК
         logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
-        
-        # Небольшая задержка перед запуском
         await asyncio.sleep(0.5)
-        
-        # Создаём задачу
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
@@ -297,40 +323,22 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     logger.info(f"🔍🔍🔍 search_and_notify: НАЧАЛО ВЫПОЛНЕНИЯ для вакансии {vacancy_id}")
     
     try:
-        # Проверяем, существует ли вакансия
-        logger.info(f"🔍 Проверяем вакансию {vacancy_id} в БД...")
         with get_session() as session:
             vacancy = session.query(Vacancy).filter(Vacancy.id == vacancy_id).first()
             if vacancy:
-                logger.info(f"🔍 Вакансия найдена: ID={vacancy.id}, роль={vacancy.role}, город={vacancy.city}")
+                logger.info(f"🔍 Вакансия найдена: {vacancy.role} в {vacancy.city}")
             else:
-                logger.error(f"❌ Вакансия {vacancy_id} не найдена в базе данных!")
-                vk_bot.send_message(user_id, f"❌ Ошибка: вакансия не найдена")
+                logger.error(f"❌ Вакансия {vacancy_id} не найдена!")
                 return
         
-        # Импортируем функцию поиска
-        logger.info("🔄 Импортируем gather_real_candidates из bot...")
-        try:
-            from bot import gather_real_candidates
-            logger.info("✅ gather_real_candidates импортирована успешно")
-        except ImportError as e:
-            logger.error(f"❌ Ошибка импорта gather_real_candidates: {e}")
-            vk_bot.send_message(user_id, f"❌ Ошибка: не могу найти функцию поиска кандидатов. {e}")
-            return
-        
-        # Запускаем поиск
+        from bot import gather_real_candidates
         logger.info(f"🔍 Вызываю gather_real_candidates({vacancy_id})...")
         await gather_real_candidates(vacancy_id)
         logger.info(f"✅ gather_real_candidates завершён")
         
-        # Проверяем результаты
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
-            candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).limit(5).all()
-            
-            logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
-            for c in candidates:
-                logger.info(f"   - {c.name_or_nick} | источник: {c.source} | оценка: {c.score} | статус: {c.status}")
+            logger.info(f"📊 Результаты: найдено {count} кандидатов")
         
         if count > 0:
             vk_bot.send_message(
@@ -339,34 +347,21 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 f"Посмотреть кандидатов: /candidates"
             )
         else:
-            hh_token_set = bool(settings.hh_api_token)
-            superjob_key_set = bool(settings.superjob_api_key)
-            
-            message = (
+            vk_bot.send_message(
+                user_id,
                 f"⚠️ Поиск завершён, но кандидаты не найдены.\n\n"
-                f"📊 Статистика:\n"
-                f"• HeadHunter токен: {'✅ установлен' if hh_token_set else '❌ не установлен'}\n"
-                f"• SuperJob ключ: {'✅ установлен' if superjob_key_set else '❌ не установлен'}\n\n"
-                f"Возможные причины:\n"
-                f"• Нет подходящих резюме в выбранном городе\n"
-                f"• Требуется настройка API токенов в Render\n"
-                f"• Ошибки в работе API (проверьте логи выше)"
+                f"Проверьте токены HeadHunter и SuperJob в настройках Render."
             )
-            vk_bot.send_message(user_id, message)
             
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
         import traceback
         traceback.print_exc()
-        vk_bot.send_message(
-            user_id,
-            f"❌ Ошибка при поиске кандидатов: {str(e)[:200]}\n\n"
-            f"Подробности в логах Render."
-        )
+        vk_bot.send_message(user_id, f"❌ Ошибка поиска: {str(e)[:200]}")
 
 
 async def handle_candidates(user_id: int, vk_bot, company, state):
-    """Показ списка кандидатов"""
+    """Показ списка кандидатов с командами для действий"""
     if not company:
         vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
         return
@@ -383,24 +378,34 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
             vk_bot.send_message(
                 user_id,
                 "📭 Кандидаты не найдены.\n\n"
-                "Возможно, поиск ещё не завершён или не запущен.\n"
-                "Проверьте, что вы создали вакансию через /new_job\n"
-                "и подождите 1-3 минуты после создания."
+                "Возможно, поиск ещё не завершён.\n"
+                "Подождите 1-3 минуты после создания вакансии."
             )
             return
         
-        # Формируем список кандидатов
-        text = f"📊 <b>Вакансия: {vacancy.role} ({vacancy.city})</b>\n\n"
-        text += f"Найдено кандидатов: {len(candidates)}\n\n"
+        # Пагинация
+        page = state.page
+        per_page = 3
+        total = len(candidates)
+        total_pages = (total + per_page - 1) // per_page
+        start = page * per_page
+        end = min(start + per_page, total)
         
-        for i, c in enumerate(candidates[:10], 1):
+        # Статистика
+        text = f"📊 <b>Вакансия: {vacancy.role} ({vacancy.city})</b>\n\n"
+        text += f"Всего кандидатов: {total}\n"
+        text += f"Страница {page + 1} из {total_pages}\n\n"
+        
+        vk_bot.send_message(user_id, text)
+        
+        # Показываем кандидатов
+        for i, c in enumerate(candidates[start:end], start + 1):
             source_emoji = {
                 'hh': '🇭',
                 'superjob': '🟢',
                 'habr': '👨‍💻',
                 'trudvsem': '🏢',
-                'telegram': '✈️',
-                'test': '🧪'
+                'telegram': '✈️'
             }.get(c.source, '📌')
             
             status_emoji = {
@@ -409,17 +414,125 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
                 'invited': '📩',
                 'qualified': '✅',
                 'interview': '📅',
-                'rejected': '❌'
+                'rejected': '❌',
+                'favorite': '⭐'
             }.get(c.status, '📌')
             
-            text += f"{i}. {source_emoji} <b>{c.name_or_nick}</b>\n"
-            text += f"   📍 {c.city} | 💼 {c.experience_text[:60]}\n"
-            text += f"   📊 Оценка: {c.score}/100 | {status_emoji} {c.status}\n\n"
+            card = (
+                f"👤 <b>{c.name_or_nick}</b>\n"
+                f"📍 {c.city}\n"
+                f"💼 {c.experience_text[:100]}\n"
+                f"🛠️ Навыки: {c.skills_text[:80]}\n"
+                f"📊 Оценка: {c.score}/100 | {status_emoji} {c.status}\n"
+                f"📎 Источник: {source_emoji}\n"
+                f"📞 Контакт: {c.contact or 'не указан'}\n\n"
+                f"<b>Действия (напишите команду):</b>\n"
+                f"✅ /invite_{c.id} — пригласить\n"
+                f"❌ /skip_{c.id} — пропустить\n"
+                f"⭐ /fav_{c.id} — в избранное\n"
+                f"💬 /ask_{c.id} — задать вопрос\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            )
+            vk_bot.send_message(user_id, card)
         
-        if len(candidates) > 10:
-            text += f"\n... и ещё {len(candidates) - 10} кандидатов"
+        # Навигация
+        if total_pages > 1:
+            nav_text = "📌 Навигация:\n"
+            if page > 0:
+                nav_text += "◀️ /prev_page — предыдущая страница\n"
+            if page < total_pages - 1:
+                nav_text += "▶️ /next_page — следующая страница"
+            vk_bot.send_message(user_id, nav_text)
+
+
+async def handle_invite(user_id: int, vk_bot, candidate_id: int):
+    """Пригласить кандидата"""
+    with get_session() as session:
+        candidate = session.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            vk_bot.send_message(user_id, "❌ Кандидат не найден")
+            return
         
-        vk_bot.send_message(user_id, text)
+        vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
+        company = session.query(Company).filter(Company.id == vacancy.company_id).first()
+        
+        # Генерируем приглашение
+        invite_text = (
+            f"👋 <b>Здравствуйте, {candidate.name_or_nick}!</b>\n\n"
+            f"Меня зовут ИИ-HR, я помогаю компании <b>{company.name_and_industry}</b> "
+            f"в <b>{company.location}</b> с подбором персонала.\n\n"
+            f"Мы сейчас ищем <b>{vacancy.role}</b>. "
+            f"Ваш опыт нам показался интересным.\n\n"
+            f"Приглашаем вас на собеседование!\n\n"
+            f"📍 Место: {company.location}\n"
+            f"📞 Контакт: {company.report_email or 'уточните у администратора'}\n\n"
+            f"Пожалуйста, напишите удобное для вас время."
+        )
+        
+        # Отправляем сообщение кандидату (если есть контакт)
+        if candidate.contact:
+            success = vk_bot.send_message(int(candidate.contact), invite_text)
+            if success:
+                candidate.status = CandidateStatus.INVITED.value
+                session.commit()
+                vk_bot.send_message(user_id, f"✅ Приглашение отправлено кандидату {candidate.name_or_nick}")
+                return
+        
+        vk_bot.send_message(
+            user_id,
+            f"📝 <b>Пример приглашения для {candidate.name_or_nick}:</b>\n\n{invite_text}\n\n"
+            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}"
+        )
+
+
+async def handle_skip(user_id: int, vk_bot, candidate_id: int, state):
+    """Пропустить кандидата (в архив)"""
+    with get_session() as session:
+        candidate = session.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            vk_bot.send_message(user_id, "❌ Кандидат не найден")
+            return
+        
+        candidate.status = CandidateStatus.ARCHIVE.value
+        candidate.rejection_reason = "Пропущен HR"
+        session.commit()
+        
+        vk_bot.send_message(user_id, f"✅ Кандидат {candidate.name_or_nick} перемещён в архив")
+
+
+async def handle_fav(user_id: int, vk_bot, candidate_id: int):
+    """Добавить кандидата в избранное"""
+    with get_session() as session:
+        candidate = session.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            vk_bot.send_message(user_id, "❌ Кандидат не найден")
+            return
+        
+        candidate.status = CandidateStatus.FAVORITE.value
+        session.commit()
+        
+        vk_bot.send_message(user_id, f"⭐ Кандидат {candidate.name_or_nick} добавлен в избранное")
+
+
+async def handle_ask(user_id: int, vk_bot, candidate_id: int):
+    """Задать вопрос кандидату"""
+    with get_session() as session:
+        candidate = session.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            vk_bot.send_message(user_id, "❌ Кандидат не найден")
+            return
+        
+        vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
+        
+        questions = (
+            f"❓ <b>Примеры вопросов для {candidate.name_or_nick}:</b>\n\n"
+            f"• Подходит ли вам график работы ({vacancy.schedule})?\n"
+            f"• Какие у вас зарплатные ожидания?\n"
+            f"• Когда вы могли бы выйти на работу?\n"
+            f"• Расскажите о вашем опыте в {vacancy.role}?\n\n"
+            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}"
+        )
+        vk_bot.send_message(user_id, questions)
 
 
 async def handle_filters(user_id: int, vk_bot, company):
@@ -470,9 +583,11 @@ async def handle_analytics(user_id: int, vk_bot, company):
             f"🔍 Найдено: {status_counts.get('found', 0)}\n"
             f"🟢 Подходят: {status_counts.get('filtered', 0)}\n"
             f"📩 Приглашены: {status_counts.get('invited', 0)}\n"
+            f"⭐ Избранные: {status_counts.get('favorite', 0)}\n"
             f"✅ Квалифицированы: {status_counts.get('qualified', 0)}\n"
             f"📅 Собеседование: {status_counts.get('interview', 0)}\n"
-            f"❌ Отсеяно: {status_counts.get('rejected', 0)}\n\n"
+            f"❌ Отсеяно: {status_counts.get('rejected', 0)}\n"
+            f"📦 Архив: {status_counts.get('archive', 0)}\n\n"
             f"<b>По источникам:</b>\n"
             f"🇭 HeadHunter: {source_counts.get('hh', 0)}\n"
             f"🟢 SuperJob: {source_counts.get('superjob', 0)}\n"
@@ -494,9 +609,16 @@ async def handle_help(user_id: int, vk_bot):
         "<b>👥 КАНДИДАТЫ</b>\n"
         "/candidates — список кандидатов\n"
         "/analytics — аналитика\n\n"
-        "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
-        "🇭 HeadHunter | 🟢 SuperJob\n"
-        "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
+        "<b>⚡ ДЕЙСТВИЯ С КАНДИДАТАМИ</b>\n"
+        "/invite_<id> — пригласить\n"
+        "/skip_<id> — пропустить\n"
+        "/fav_<id> — в избранное\n"
+        "/ask_<id> — задать вопрос\n\n"
+        "<b>📌 НАВИГАЦИЯ</b>\n"
+        "/next_page — следующая страница\n"
+        "/prev_page — предыдущая страница\n\n"
+        "<b>🌐 ИСТОЧНИКИ</b>\n"
+        "🇭 HeadHunter | 🟢 SuperJob | 👨‍💻 Habr | 🏢 Trudvsem | ✈️ Telegram\n\n"
         "По всем вопросам обращайтесь к администратору."
     )
     vk_bot.send_message(user_id, text)
