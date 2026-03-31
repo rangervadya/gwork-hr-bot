@@ -264,8 +264,11 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
                 must_have=must_have,
             )
             session.add(vacancy)
-            session.commit()
+            session.flush()
             vacancy_id = vacancy.id
+            session.commit()
+            
+            logger.info(f"✅ Вакансия создана: ID={vacancy_id}, роль={vacancy.role}, город={vacancy.city}")
         
         state.state = None
         state.data = {}
@@ -289,20 +292,38 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     logger.info(f"🔍 search_and_notify: начат поиск для вакансии {vacancy_id}")
     
     try:
+        # Проверяем, существует ли вакансия
+        with get_session() as session:
+            vacancy = session.query(Vacancy).filter(Vacancy.id == vacancy_id).first()
+            if vacancy:
+                logger.info(f"🔍 Вакансия найдена: ID={vacancy.id}, роль={vacancy.role}, город={vacancy.city}")
+            else:
+                logger.error(f"❌ Вакансия {vacancy_id} не найдена в базе данных!")
+                vk_bot.send_message(user_id, f"❌ Ошибка: вакансия не найдена")
+                return
+        
         # Принудительно перезагружаем модуль bot
+        logger.info("🔄 Перезагружаем модуль bot для получения актуальных функций...")
         if 'bot' in sys.modules:
             importlib.reload(sys.modules['bot'])
         
+        # Импортируем функцию поиска
         from bot import gather_real_candidates
+        logger.info("✅ Функция gather_real_candidates импортирована")
         
+        # Запускаем поиск
         logger.info(f"🔍 Вызываю gather_real_candidates({vacancy_id})...")
         await gather_real_candidates(vacancy_id)
         logger.info(f"✅ gather_real_candidates завершён")
         
+        # Проверяем результаты
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
-        
-        logger.info(f"✅ Найдено кандидатов: {count}")
+            candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).limit(5).all()
+            
+            logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
+            for c in candidates:
+                logger.info(f"   - {c.name_or_nick} | источник: {c.source} | оценка: {c.score} | статус: {c.status}")
         
         if count > 0:
             vk_bot.send_message(
@@ -311,14 +332,29 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 f"Посмотреть кандидатов: /candidates"
             )
         else:
-            vk_bot.send_message(
-                user_id,
+            # Проверяем настройки API токенов
+            hh_token_set = bool(settings.hh_api_token)
+            superjob_key_set = bool(settings.superjob_api_key)
+            
+            message = (
                 f"⚠️ Поиск завершён, но кандидаты не найдены.\n\n"
+                f"📊 Статистика:\n"
+                f"• HeadHunter токен: {'✅ установлен' if hh_token_set else '❌ не установлен'}\n"
+                f"• SuperJob ключ: {'✅ установлен' if superjob_key_set else '❌ не установлен'}\n\n"
                 f"Возможные причины:\n"
-                f"• Нет токенов HeadHunter или SuperJob в настройках\n"
                 f"• Нет подходящих резюме в выбранном городе\n"
-                f"• Ошибки в API (проверьте логи Render)"
+                f"• Требуется настройка API токенов в Render\n"
+                f"• Ошибки в работе API (проверьте логи выше)"
             )
+            vk_bot.send_message(user_id, message)
+            
+    except ImportError as e:
+        logger.error(f"❌ Ошибка импорта gather_real_candidates: {e}")
+        vk_bot.send_message(
+            user_id,
+            f"❌ Ошибка: не могу найти функцию поиска кандидатов.\n\n"
+            f"Техническая ошибка: {str(e)[:200]}"
+        )
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
         import traceback
@@ -326,7 +362,7 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
         vk_bot.send_message(
             user_id,
             f"❌ Ошибка при поиске кандидатов: {str(e)[:200]}\n\n"
-            f"Проверьте логи Render для деталей."
+            f"Подробности в логах Render."
         )
 
 
@@ -364,7 +400,8 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
                 'superjob': '🟢',
                 'habr': '👨‍💻',
                 'trudvsem': '🏢',
-                'telegram': '✈️'
+                'telegram': '✈️',
+                'test': '🧪'
             }.get(c.source, '📌')
             
             status_emoji = {
