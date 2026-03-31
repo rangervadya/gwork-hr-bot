@@ -284,7 +284,11 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         
         # ЗАПУСКАЕМ ПОИСК
         logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
-        # Создаём задачу и ждём её выполнения
+        
+        # Небольшая задержка перед запуском
+        await asyncio.sleep(0.5)
+        
+        # Создаём задачу
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
