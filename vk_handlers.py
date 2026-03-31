@@ -93,6 +93,16 @@ async def handle_vk_message(data: Dict[str, Any]):
         await handle_candidates(user_id, vk_bot, company, state)
         return
     
+    elif text == '/next_page' or text == 'дальше':
+        state.page += 1
+        await handle_candidates(user_id, vk_bot, company, state)
+        return
+    
+    elif text == '/prev_page' or text == 'назад':
+        state.page = max(0, state.page - 1)
+        await handle_candidates(user_id, vk_bot, company, state)
+        return
+    
     elif text == '/filters' or text == 'фильтры':
         await handle_filters(user_id, vk_bot, company)
         return
@@ -119,6 +129,8 @@ async def handle_vk_message(data: Dict[str, Any]):
             "/new_job — создать вакансию\n"
             "/search — запустить поиск кандидатов\n"
             "/candidates — список кандидатов\n"
+            "/next_page — следующая страница\n"
+            "/prev_page — предыдущая страница\n"
             "/filters — управление фильтрами\n"
             "/analytics — аналитика\n"
             "/help — справка\n\n"
@@ -156,9 +168,10 @@ async def handle_start(user_id: int, vk_bot, company):
             "• Общаюсь с кандидатами и провожу предквалификацию\n"
             "• Назначаю собеседования\n\n"
             "📋 <b>Как создать вакансию:</b>\n"
-            "1. Напишите /new_job\n"
-            "2. Укажите роль и город\n"
-            "3. Задайте параметры поиска\n\n"
+            "1. Напишите /onboarding\n"
+            "2. Напишите /new_job\n"
+            "3. Укажите роль и город\n"
+            "4. Задайте параметры поиска\n\n"
             "После создания вакансии запустите поиск: /search\n\n"
             "Для начала работы напишите /onboarding"
         )
@@ -315,6 +328,9 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
+            f"📋 <b>{state.data['role']}</b> в городе <b>{state.data['city']}</b>\n"
+            f"💰 Зарплата: {state.data.get('salary_from', '-')} - {state.data.get('salary_to', '-')}\n"
+            f"📅 График: {state.data['schedule']}\n\n"
             f"Теперь запустите поиск кандидатов: /search"
         )
 
@@ -335,7 +351,8 @@ async def handle_search(user_id: int, vk_bot, company, state):
         
         vk_bot.send_message(
             user_id,
-            f"🔍 Начинаю поиск кандидатов для вакансии {vacancy.role} в {vacancy.city}...\n"
+            f"🔍 Начинаю поиск кандидатов для вакансии:\n"
+            f"📋 <b>{vacancy.role}</b> в городе <b>{vacancy.city}</b>\n\n"
             f"Это может занять 1-3 минуты.\n\n"
             f"После завершения используйте /candidates"
         )
@@ -371,13 +388,21 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
         # Проверяем результаты
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
+            candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).limit(5).all()
             logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
+            for c in candidates:
+                logger.info(f"   - {c.name_or_nick} | источник: {c.source} | ссылка: {c.source_link or 'нет'}")
         
         if count > 0:
             vk_bot.send_message(
                 user_id,
                 f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
-                f"Посмотреть кандидатов: /candidates"
+                f"Посмотреть кандидатов: /candidates\n\n"
+                f"<b>Команды для работы с кандидатами:</b>\n"
+                f"/invite_<id> — пригласить\n"
+                f"/skip_<id> — пропустить\n"
+                f"/fav_<id> — в избранное\n"
+                f"/ask_<id> — задать вопрос"
             )
         else:
             hh_token_set = bool(settings.hh_api_token)
@@ -403,7 +428,7 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
 
 
 async def handle_candidates(user_id: int, vk_bot, company, state):
-    """Показ списка кандидатов с командами для действий"""
+    """Показ списка кандидатов с командами для действий и ссылками"""
     if not company:
         vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
         return
@@ -457,18 +482,26 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
                 'qualified': '✅',
                 'interview': '📅',
                 'rejected': '❌',
-                'favorite': '⭐'
+                'favorite': '⭐',
+                'archive': '📦'
             }.get(c.status, '📌')
             
             card = (
-                f"👤 <b>{c.name_or_nick}</b>\n"
+                f"👤 <b>{c.name_or_nick}</b> (ID: {c.id})\n"
                 f"📍 {c.city}\n"
                 f"💼 {c.experience_text[:100]}\n"
                 f"🛠️ Навыки: {c.skills_text[:80]}\n"
                 f"📊 Оценка: {c.score}/100 | {status_emoji} {c.status}\n"
                 f"📎 Источник: {source_emoji}\n"
-                f"📞 Контакт: {c.contact or 'не указан'}\n\n"
-                f"<b>Действия (напишите команду):</b>\n"
+                f"📞 Контакт: {c.contact or 'не указан'}\n"
+            )
+            
+            # Добавляем ссылку на профиль, если есть
+            if c.source_link and c.source_link not in ['', 'None']:
+                card += f"🔗 <a href='{c.source_link}'>Ссылка на профиль ({c.source})</a>\n"
+            
+            card += (
+                f"\n<b>Действия (напишите команду):</b>\n"
                 f"✅ /invite_{c.id} — пригласить\n"
                 f"❌ /skip_{c.id} — пропустить\n"
                 f"⭐ /fav_{c.id} — в избранное\n"
@@ -520,10 +553,12 @@ async def handle_invite(user_id: int, vk_bot, candidate_id: int):
                 vk_bot.send_message(user_id, f"✅ Приглашение отправлено кандидату {candidate.name_or_nick}")
                 return
         
+        # Если нет контакта или не удалось отправить
         vk_bot.send_message(
             user_id,
             f"📝 <b>Пример приглашения для {candidate.name_or_nick}:</b>\n\n{invite_text}\n\n"
-            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}"
+            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}\n"
+            f"🔗 Ссылка на профиль: {candidate.source_link or 'нет'}"
         )
 
 
@@ -572,7 +607,8 @@ async def handle_ask(user_id: int, vk_bot, candidate_id: int):
             f"• Какие у вас зарплатные ожидания?\n"
             f"• Когда вы могли бы выйти на работу?\n"
             f"• Расскажите о вашем опыте в {vacancy.role}?\n\n"
-            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}"
+            f"📞 Контакт кандидата: {candidate.contact or 'не указан'}\n"
+            f"🔗 Ссылка на профиль: {candidate.source_link or 'нет'}"
         )
         vk_bot.send_message(user_id, questions)
 
@@ -651,14 +687,20 @@ async def handle_help(user_id: int, vk_bot):
         "<b>👥 КАНДИДАТЫ</b>\n"
         "/search — запустить поиск кандидатов\n"
         "/candidates — список кандидатов\n"
+        "/next_page — следующая страница\n"
+        "/prev_page — предыдущая страница\n"
         "/analytics — аналитика\n\n"
         "<b>⚡ ДЕЙСТВИЯ С КАНДИДАТАМИ</b>\n"
         "/invite_<id> — пригласить\n"
         "/skip_<id> — пропустить\n"
         "/fav_<id> — в избранное\n"
         "/ask_<id> — задать вопрос\n\n"
-        "<b>🌐 ИСТОЧНИКИ</b>\n"
-        "🇭 HeadHunter | 🟢 SuperJob | 👨‍💻 Habr | 🏢 Trudvsem | ✈️ Telegram\n\n"
+        "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
+        "🇭 HeadHunter — резюме с ссылкой\n"
+        "🟢 SuperJob — резюме с ссылкой\n"
+        "👨‍💻 Habr Career — IT-специалисты\n"
+        "🏢 Работа в России — вакансии\n"
+        "✈️ Telegram — парсинг каналов\n\n"
         "По всем вопросам обращайтесь к администратору."
     )
     vk_bot.send_message(user_id, text)
