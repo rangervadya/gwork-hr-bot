@@ -282,17 +282,19 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
             f"После завершения поиска используйте /candidates"
         )
         
-        # ЗАПУСКАЕМ РЕАЛЬНЫЙ ПОИСК КАНДИДАТОВ
+        # ЗАПУСКАЕМ ПОИСК
         logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
+        # Создаём задачу и ждём её выполнения
         asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
 
 
 async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     """Поиск реальных кандидатов и уведомление"""
-    logger.info(f"🔍 search_and_notify: начат поиск для вакансии {vacancy_id}")
+    logger.info(f"🔍🔍🔍 search_and_notify: НАЧАЛО ВЫПОЛНЕНИЯ для вакансии {vacancy_id}")
     
     try:
         # Проверяем, существует ли вакансия
+        logger.info(f"🔍 Проверяем вакансию {vacancy_id} в БД...")
         with get_session() as session:
             vacancy = session.query(Vacancy).filter(Vacancy.id == vacancy_id).first()
             if vacancy:
@@ -302,14 +304,15 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 vk_bot.send_message(user_id, f"❌ Ошибка: вакансия не найдена")
                 return
         
-        # Принудительно перезагружаем модуль bot
-        logger.info("🔄 Перезагружаем модуль bot для получения актуальных функций...")
-        if 'bot' in sys.modules:
-            importlib.reload(sys.modules['bot'])
-        
         # Импортируем функцию поиска
-        from bot import gather_real_candidates
-        logger.info("✅ Функция gather_real_candidates импортирована")
+        logger.info("🔄 Импортируем gather_real_candidates из bot...")
+        try:
+            from bot import gather_real_candidates
+            logger.info("✅ gather_real_candidates импортирована успешно")
+        except ImportError as e:
+            logger.error(f"❌ Ошибка импорта gather_real_candidates: {e}")
+            vk_bot.send_message(user_id, f"❌ Ошибка: не могу найти функцию поиска кандидатов. {e}")
+            return
         
         # Запускаем поиск
         logger.info(f"🔍 Вызываю gather_real_candidates({vacancy_id})...")
@@ -332,7 +335,6 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 f"Посмотреть кандидатов: /candidates"
             )
         else:
-            # Проверяем настройки API токенов
             hh_token_set = bool(settings.hh_api_token)
             superjob_key_set = bool(settings.superjob_api_key)
             
@@ -348,13 +350,6 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
             )
             vk_bot.send_message(user_id, message)
             
-    except ImportError as e:
-        logger.error(f"❌ Ошибка импорта gather_real_candidates: {e}")
-        vk_bot.send_message(
-            user_id,
-            f"❌ Ошибка: не могу найти функцию поиска кандидатов.\n\n"
-            f"Техническая ошибка: {str(e)[:200]}"
-        )
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
         import traceback
