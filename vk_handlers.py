@@ -85,6 +85,10 @@ async def handle_vk_message(data: Dict[str, Any]):
         await handle_new_job_start(user_id, vk_bot, state)
         return
     
+    elif text == '/search' or text == 'поиск':
+        await handle_search(user_id, vk_bot, company, state)
+        return
+    
     elif text == '/candidates' or text == 'кандидаты':
         await handle_candidates(user_id, vk_bot, company, state)
         return
@@ -113,6 +117,7 @@ async def handle_vk_message(data: Dict[str, Any]):
             "Доступные команды:\n"
             "/start — начать работу\n"
             "/new_job — создать вакансию\n"
+            "/search — запустить поиск кандидатов\n"
             "/candidates — список кандидатов\n"
             "/filters — управление фильтрами\n"
             "/analytics — аналитика\n"
@@ -135,6 +140,7 @@ async def handle_start(user_id: int, vk_bot, company):
             f"💰 {company.salary_range}\n\n"
             f"<b>Доступные команды:</b>\n"
             f"/new_job — создать новую вакансию\n"
+            f"/search — запустить поиск кандидатов\n"
             f"/candidates — список кандидатов\n"
             f"/filters — управление фильтрами\n"
             f"/analytics — аналитика\n"
@@ -153,6 +159,7 @@ async def handle_start(user_id: int, vk_bot, company):
             "1. Напишите /new_job\n"
             "2. Укажите роль и город\n"
             "3. Задайте параметры поиска\n\n"
+            "После создания вакансии запустите поиск: /search\n\n"
             "Для начала работы напишите /onboarding"
         )
     vk_bot.send_message(user_id, text)
@@ -308,14 +315,33 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
-            f"🔍 Начинаю поиск кандидатов...\n"
+            f"Теперь запустите поиск кандидатов: /search"
+        )
+
+
+async def handle_search(user_id: int, vk_bot, company, state):
+    """Ручной запуск поиска кандидатов"""
+    if not company:
+        vk_bot.send_message(user_id, "❌ Сначала пройдите онбординг: /onboarding")
+        return
+    
+    with get_session() as session:
+        vacancy = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).first()
+        if not vacancy:
+            vk_bot.send_message(user_id, "📭 Нет вакансий. Создайте: /new_job")
+            return
+        
+        vacancy_id = vacancy.id
+        
+        vk_bot.send_message(
+            user_id,
+            f"🔍 Начинаю поиск кандидатов для вакансии {vacancy.role} в {vacancy.city}...\n"
             f"Это может занять 1-3 минуты.\n\n"
-            f"После завершения поиска используйте /candidates"
+            f"После завершения используйте /candidates"
         )
         
-        logger.info(f"🔍 ЗАПУСК ПОИСКА для вакансии {vacancy_id}")
-        await asyncio.sleep(0.5)
-        asyncio.create_task(search_and_notify(user_id, vacancy_id, vk_bot))
+        # Запускаем поиск
+        await search_and_notify(user_id, vacancy_id, vk_bot)
 
 
 async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
@@ -329,16 +355,23 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 logger.info(f"🔍 Вакансия найдена: {vacancy.role} в {vacancy.city}")
             else:
                 logger.error(f"❌ Вакансия {vacancy_id} не найдена!")
+                vk_bot.send_message(user_id, f"❌ Ошибка: вакансия не найдена")
                 return
         
+        # Импортируем функцию поиска
+        logger.info("🔄 Импортируем gather_real_candidates из bot...")
         from bot import gather_real_candidates
+        logger.info("✅ gather_real_candidates импортирована")
+        
+        # Запускаем поиск
         logger.info(f"🔍 Вызываю gather_real_candidates({vacancy_id})...")
         await gather_real_candidates(vacancy_id)
         logger.info(f"✅ gather_real_candidates завершён")
         
+        # Проверяем результаты
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
-            logger.info(f"📊 Результаты: найдено {count} кандидатов")
+            logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
         
         if count > 0:
             vk_bot.send_message(
@@ -347,11 +380,20 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
                 f"Посмотреть кандидатов: /candidates"
             )
         else:
-            vk_bot.send_message(
-                user_id,
+            hh_token_set = bool(settings.hh_api_token)
+            superjob_key_set = bool(settings.superjob_api_key)
+            
+            message = (
                 f"⚠️ Поиск завершён, но кандидаты не найдены.\n\n"
-                f"Проверьте токены HeadHunter и SuperJob в настройках Render."
+                f"📊 Статистика:\n"
+                f"• HeadHunter токен: {'✅ установлен' if hh_token_set else '❌ не установлен'}\n"
+                f"• SuperJob ключ: {'✅ установлен' if superjob_key_set else '❌ не установлен'}\n\n"
+                f"Возможные причины:\n"
+                f"• Нет подходящих резюме в выбранном городе\n"
+                f"• Требуется настройка API токенов в Render\n"
+                f"• Проверьте логи Render для деталей"
             )
+            vk_bot.send_message(user_id, message)
             
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
@@ -378,8 +420,8 @@ async def handle_candidates(user_id: int, vk_bot, company, state):
             vk_bot.send_message(
                 user_id,
                 "📭 Кандидаты не найдены.\n\n"
-                "Возможно, поиск ещё не завершён.\n"
-                "Подождите 1-3 минуты после создания вакансии."
+                "Запустите поиск: /search\n\n"
+                "После завершения поиска используйте /candidates"
             )
             return
         
@@ -470,7 +512,7 @@ async def handle_invite(user_id: int, vk_bot, candidate_id: int):
         )
         
         # Отправляем сообщение кандидату (если есть контакт)
-        if candidate.contact:
+        if candidate.contact and candidate.contact.isdigit():
             success = vk_bot.send_message(int(candidate.contact), invite_text)
             if success:
                 candidate.status = CandidateStatus.INVITED.value
@@ -607,6 +649,7 @@ async def handle_help(user_id: int, vk_bot):
         "/new_job — новая вакансия\n"
         "/filters — управление фильтрами\n\n"
         "<b>👥 КАНДИДАТЫ</b>\n"
+        "/search — запустить поиск кандидатов\n"
         "/candidates — список кандидатов\n"
         "/analytics — аналитика\n\n"
         "<b>⚡ ДЕЙСТВИЯ С КАНДИДАТАМИ</b>\n"
@@ -614,9 +657,6 @@ async def handle_help(user_id: int, vk_bot):
         "/skip_<id> — пропустить\n"
         "/fav_<id> — в избранное\n"
         "/ask_<id> — задать вопрос\n\n"
-        "<b>📌 НАВИГАЦИЯ</b>\n"
-        "/next_page — следующая страница\n"
-        "/prev_page — предыдущая страница\n\n"
         "<b>🌐 ИСТОЧНИКИ</b>\n"
         "🇭 HeadHunter | 🟢 SuperJob | 👨‍💻 Habr | 🏢 Trudvsem | ✈️ Telegram\n\n"
         "По всем вопросам обращайтесь к администратору."
