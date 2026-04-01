@@ -128,7 +128,8 @@ async def handle_vk_message(message_data: Dict[str, Any]):
     Обрабатывает сообщение из VK — передаём в vk_handlers
     """
     try:
-        # Получаем text из message_data
+        # Получаем user_id и text из message_data
+        user_id = message_data.get('user_id')
         text = message_data.get('text', '').strip()
         
         from vk_handlers import handle_vk_message as vk_handler
