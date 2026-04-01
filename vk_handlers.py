@@ -319,7 +319,14 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
             vacancy_id = vacancy.id
             session.commit()
             
-            logger.info(f"✅ Вакансия создана: ID={vacancy_id}, роль={vacancy.role}, город={vacancy.city}")
+            # Сохраняем данные для сообщения ДО очистки state
+            role = state.data['role']
+            city = state.data['city']
+            salary_from = state.data.get('salary_from', '-')
+            salary_to = state.data.get('salary_to', '-')
+            schedule = state.data['schedule']
+            
+            logger.info(f"✅ Вакансия создана: ID={vacancy_id}, роль={role}, город={city}")
         
         state.state = None
         state.data = {}
@@ -328,9 +335,9 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         vk_bot.send_message(
             user_id,
             f"✅ <b>Вакансия создана!</b>\n\n"
-            f"📋 <b>{state.data['role']}</b> в городе <b>{state.data['city']}</b>\n"
-            f"💰 Зарплата: {state.data.get('salary_from', '-')} - {state.data.get('salary_to', '-')}\n"
-            f"📅 График: {state.data['schedule']}\n\n"
+            f"📋 <b>{role}</b> в городе <b>{city}</b>\n"
+            f"💰 Зарплата: {salary_from} - {salary_to}\n"
+            f"📅 График: {schedule}\n\n"
             f"Теперь запустите поиск кандидатов: /search"
         )
 
@@ -348,11 +355,13 @@ async def handle_search(user_id: int, vk_bot, company, state):
             return
         
         vacancy_id = vacancy.id
+        role = vacancy.role
+        city = vacancy.city
         
         vk_bot.send_message(
             user_id,
             f"🔍 Начинаю поиск кандидатов для вакансии:\n"
-            f"📋 <b>{vacancy.role}</b> в городе <b>{vacancy.city}</b>\n\n"
+            f"📋 <b>{role}</b> в городе <b>{city}</b>\n\n"
             f"Это может занять 1-3 минуты.\n\n"
             f"После завершения используйте /candidates"
         )
@@ -388,21 +397,13 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
         # Проверяем результаты
         with get_session() as session:
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
-            candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).limit(5).all()
             logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
-            for c in candidates:
-                logger.info(f"   - {c.name_or_nick} | источник: {c.source} | ссылка: {c.source_link or 'нет'}")
         
         if count > 0:
             vk_bot.send_message(
                 user_id,
                 f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
-                f"Посмотреть кандидатов: /candidates\n\n"
-                f"<b>Команды для работы с кандидатами:</b>\n"
-                f"/invite_<id> — пригласить\n"
-                f"/skip_<id> — пропустить\n"
-                f"/fav_<id> — в избранное\n"
-                f"/ask_<id> — задать вопрос"
+                f"Посмотреть кандидатов: /candidates"
             )
         else:
             hh_token_set = bool(settings.hh_api_token)
@@ -553,7 +554,6 @@ async def handle_invite(user_id: int, vk_bot, candidate_id: int):
                 vk_bot.send_message(user_id, f"✅ Приглашение отправлено кандидату {candidate.name_or_nick}")
                 return
         
-        # Если нет контакта или не удалось отправить
         vk_bot.send_message(
             user_id,
             f"📝 <b>Пример приглашения для {candidate.name_or_nick}:</b>\n\n{invite_text}\n\n"
@@ -696,11 +696,8 @@ async def handle_help(user_id: int, vk_bot):
         "/fav_<id> — в избранное\n"
         "/ask_<id> — задать вопрос\n\n"
         "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
-        "🇭 HeadHunter — резюме с ссылкой\n"
-        "🟢 SuperJob — резюме с ссылкой\n"
-        "👨‍💻 Habr Career — IT-специалисты\n"
-        "🏢 Работа в России — вакансии\n"
-        "✈️ Telegram — парсинг каналов\n\n"
+        "🇭 HeadHunter | 🟢 SuperJob\n"
+        "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
         "По всем вопросам обращайтесь к администратору."
     )
     vk_bot.send_message(user_id, text)
