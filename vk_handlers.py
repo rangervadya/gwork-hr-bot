@@ -121,6 +121,7 @@ async def handle_vk_message(data: Dict[str, Any]):
     elif state.state == 'new_job':
         await handle_new_job_step(user_id, vk_bot, state, text)
     else:
+        dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
         vk_bot.send_message(
             user_id,
             "❓ Неизвестная команда.\n\n"
@@ -139,11 +140,14 @@ async def handle_vk_message(data: Dict[str, Any]):
             "/skip_<id> — пропустить\n"
             "/fav_<id> — в избранное\n"
             "/ask_<id> — задать вопрос"
+            f"{dev_info}"
         )
 
 
 async def handle_start(user_id: int, vk_bot, company):
     """Обработка /start"""
+    dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
+    
     if company:
         text = (
             f"👋 С возвращением, {company.name_and_industry}!\n\n"
@@ -157,6 +161,7 @@ async def handle_start(user_id: int, vk_bot, company):
             f"/filters — управление фильтрами\n"
             f"/analytics — аналитика\n"
             f"/help — справка"
+            f"{dev_info}"
         )
     else:
         text = (
@@ -174,6 +179,7 @@ async def handle_start(user_id: int, vk_bot, company):
             "4. Задайте параметры поиска\n\n"
             "После создания вакансии запустите поиск: /search\n\n"
             "Для начала работы напишите /onboarding"
+            f"{dev_info}"
         )
     vk_bot.send_message(user_id, text)
 
@@ -237,10 +243,12 @@ async def handle_onboarding_step(user_id: int, vk_bot, state, text: str):
         state.data = {}
         state.step = 0
         
+        dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
         vk_bot.send_message(
             user_id,
             "✅ Профиль компании сохранён!\n\n"
             "Теперь создайте вакансию: /new_job"
+            f"{dev_info}"
         )
 
 
@@ -332,6 +340,7 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
         state.data = {}
         state.step = 0
         
+        dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
         vk_bot.send_message(
             user_id,
             f"✅ Вакансия создана!\n\n"
@@ -339,6 +348,7 @@ async def handle_new_job_step(user_id: int, vk_bot, state, text: str):
             f"💰 Зарплата: {salary_from} - {salary_to}\n"
             f"📅 График: {schedule}\n\n"
             f"Теперь запустите поиск кандидатов: /search"
+            f"{dev_info}"
         )
 
 
@@ -370,6 +380,61 @@ async def handle_search(user_id: int, vk_bot, company, state):
         await search_and_notify(user_id, vacancy_id, vk_bot)
 
 
+async def auto_invite_candidates(vacancy_id: int, vk_bot, user_id: int):
+    """Автоматически приглашает кандидатов с высоким рейтингом"""
+    try:
+        with get_session() as session:
+            vacancy = session.query(Vacancy).filter(Vacancy.id == vacancy_id).first()
+            if not vacancy:
+                return
+            
+            company = session.query(Company).filter(Company.id == vacancy.company_id).first()
+            
+            # Ищем кандидатов с оценкой 80+
+            top_candidates = session.query(Candidate).filter(
+                Candidate.vacancy_id == vacancy_id,
+                Candidate.score >= 80,
+                Candidate.status == CandidateStatus.FOUND.value
+            ).all()
+            
+            invited_count = 0
+            for candidate in top_candidates:
+                # Проверяем, есть ли контакт для отправки
+                if candidate.contact and candidate.contact.isdigit():
+                    invite_text = generate_invite_message_simple(candidate, vacancy, company)
+                    success = vk_bot.send_message(int(candidate.contact), invite_text)
+                    if success:
+                        candidate.status = CandidateStatus.INVITED.value
+                        invited_count += 1
+                        logger.info(f"✅ Авто-приглашение отправлено {candidate.name_or_nick}")
+            
+            if invited_count > 0:
+                session.commit()
+                await vk_bot.send_message(
+                    user_id,
+                    f"📨 Автоматически отправлено {invited_count} приглашений кандидатам с высоким рейтингом!"
+                )
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка авто-приглашения: {e}")
+
+
+def generate_invite_message_simple(candidate: Candidate, vacancy: Vacancy, company: Company) -> str:
+    """Генерирует простое приглашение для кандидата (без HTML)"""
+    return (
+        f"👋 Здравствуйте, {candidate.name_or_nick}!\n\n"
+        f"Меня зовут ИИ-HR, я помогаю компании {company.name_and_industry} "
+        f"в {company.location} с подбором персонала.\n\n"
+        f"Мы сейчас ищем {vacancy.role}. "
+        f"Ваш опыт нам показался интересным.\n\n"
+        f"Приглашаем вас на собеседование!\n\n"
+        f"📍 Место: {company.location}\n"
+        f"📞 Контакт: {company.report_email or 'уточните у администратора'}\n\n"
+        f"Пожалуйста, напишите удобное для вас время.\n\n"
+        f"📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
+    )
+
+
 async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
     """Поиск реальных кандидатов и уведомление"""
     logger.info(f"🔍🔍🔍 search_and_notify: НАЧАЛО ВЫПОЛНЕНИЯ для вакансии {vacancy_id}")
@@ -399,11 +464,15 @@ async def search_and_notify(user_id: int, vacancy_id: int, vk_bot):
             count = session.query(Candidate).filter(Candidate.vacancy_id == vacancy_id).count()
             logger.info(f"📊 Результаты поиска: найдено {count} кандидатов")
         
+        # Автоматически приглашаем топ-кандидатов
+        await auto_invite_candidates(vacancy_id, vk_bot, user_id)
+        
         if count > 0:
             vk_bot.send_message(
                 user_id,
                 f"✅ Поиск завершён! Найдено кандидатов: {count}\n\n"
-                f"Посмотреть кандидатов: /candidates"
+                f"Топ-кандидаты (оценка 80+) получили автоматические приглашения!\n\n"
+                f"Посмотреть всех кандидатов: /candidates"
             )
         else:
             hh_token_set = bool(settings.hh_api_token)
@@ -534,17 +603,7 @@ async def handle_invite(user_id: int, vk_bot, candidate_id: int):
         company = session.query(Company).filter(Company.id == vacancy.company_id).first()
         
         # Генерируем приглашение (без HTML)
-        invite_text = (
-            f"👋 Здравствуйте, {candidate.name_or_nick}!\n\n"
-            f"Меня зовут ИИ-HR, я помогаю компании {company.name_and_industry} "
-            f"в {company.location} с подбором персонала.\n\n"
-            f"Мы сейчас ищем {vacancy.role}. "
-            f"Ваш опыт нам показался интересным.\n\n"
-            f"Приглашаем вас на собеседование!\n\n"
-            f"📍 Место: {company.location}\n"
-            f"📞 Контакт: {company.report_email or 'уточните у администратора'}\n\n"
-            f"Пожалуйста, напишите удобное для вас время."
-        )
+        invite_text = generate_invite_message_simple(candidate, vacancy, company)
         
         # Отправляем сообщение кандидату (если есть контакт)
         if candidate.contact and candidate.contact.isdigit():
@@ -660,6 +719,8 @@ async def handle_analytics(user_id: int, vk_bot, company):
             status_counts[c.status] = status_counts.get(c.status, 0) + 1
             source_counts[c.source] = source_counts.get(c.source, 0) + 1
         
+        dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
+        
         text = (
             f"📊 Аналитика: {vacancy.role}\n\n"
             f"Всего кандидатов: {total}\n\n"
@@ -678,12 +739,15 @@ async def handle_analytics(user_id: int, vk_bot, company):
             f"👨‍💻 Habr: {source_counts.get('habr', 0)}\n"
             f"🏢 Trudvsem: {source_counts.get('trudvsem', 0)}\n"
             f"✈️ Telegram: {source_counts.get('telegram', 0)}"
+            f"{dev_info}"
         )
         vk_bot.send_message(user_id, text)
 
 
 async def handle_help(user_id: int, vk_bot):
     """Справка"""
+    dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
+    
     text = (
         "🤖 GWork HR Bot - Справка\n\n"
         "🔧 НАСТРОЙКА\n"
@@ -703,7 +767,7 @@ async def handle_help(user_id: int, vk_bot):
         "/ask_<id> — задать вопрос\n\n"
         "🌐 ИСТОЧНИКИ КАНДИДАТОВ\n"
         "🇭 HeadHunter | 🟢 SuperJob\n"
-        "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
-        "По всем вопросам обращайтесь к администратору."
+        "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram"
+        f"{dev_info}"
     )
     vk_bot.send_message(user_id, text)
