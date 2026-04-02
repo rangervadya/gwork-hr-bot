@@ -3721,20 +3721,24 @@ async def main() -> None:
     logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
     logger.info("=" * 60)
     
-    # Запускаем веб-сервер для Render health checks в отдельном потоке
+    # Запускаем веб-сервер для Render health checks
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-    logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
+    logger.info("🌐 Веб-сервер для health checks запущен")
     
-    # Инициализируем VK бота, если есть токен
-    vk_bot_instance = None
+    # Удаляем webhook, чтобы не было конфликта
+    await bot.delete_webhook()
+    logger.info("✅ Webhook удалён, используем polling")
+    
+    # Запускаем VK бота (если есть токен)
     if settings.has_vk:
         vk_bot_instance = init_vk_bot()
         if vk_bot_instance:
-            # Запускаем VK бота в отдельной задаче
             asyncio.create_task(vk_bot_instance.start_polling(handle_vk_message))
             logger.info("📱 VK бот запущен в фоновом режиме")
     
+    # Запускаем Telegram бота
+    logger.info("🤖 Запускаем Telegram бота...")
     await dp.start_polling(bot)
 
 
