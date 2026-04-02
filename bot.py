@@ -1,4 +1,6 @@
 # FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support
+# ВЕРСИЯ С РАЗДЕЛЬНЫМИ EVENT LOOP ДЛЯ VK И TELEGRAM
+
 import asyncio
 import logging
 import re
@@ -82,6 +84,30 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     }), 200
 
+@app.route('/reset_webhook')
+def reset_webhook():
+    """Эндпоинт для сброса webhook Telegram"""
+    import asyncio
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def reset():
+            await bot.delete_webhook()
+            info = await bot.get_webhook_info()
+            return info
+        
+        info = loop.run_until_complete(reset())
+        loop.close()
+        
+        return jsonify({
+            'status': 'ok',
+            'message': 'Webhook удалён',
+            'webhook_url': info.url if info else 'None'
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 def run_web_server():
     """Запускает Flask сервер в отдельном потоке"""
     port = int(os.environ.get('PORT', 10000))
@@ -106,69 +132,41 @@ def clean_html(text: str) -> str:
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
 
-@app.route('/reset_webhook')
-def reset_webhook():
-    """Эндпоинт для сброса webhook Telegram"""
-    import asyncio
-    try:
-        # Создаём новый event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Удаляем webhook
-        async def reset():
-            await bot.delete_webhook()
-            info = await bot.get_webhook_info()
-            return info
-        
-        info = loop.run_until_complete(reset())
-        loop.close()
-        
-        return jsonify({
-            'status': 'ok',
-            'message': 'Webhook удалён',
-            'webhook_url': info.url if info else 'None'
-        })
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С VK =====
+# Глобальная переменная для хранения экземпляра VK бота
+vk_bot_instance = None
+vk_own_loop = None
+vk_thread = None
 
 async def send_vk_message_to_candidate(candidate: Candidate, message_text: str) -> bool:
     """
     Отправляет сообщение кандидату через VK
     """
-    global vk_bot
+    global vk_bot_instance
     
-    if not vk_bot:
+    if not vk_bot_instance:
         logger.warning("⚠️ VK бот не инициализирован")
         return False
     
-    # Используем метод отправки сообщения кандидату
-    return vk_bot.send_message_to_candidate(candidate, message_text)
+    return vk_bot_instance.send_message_to_candidate(candidate, message_text)
 
 
 async def handle_vk_message(message_data: Dict[str, Any]):
     """
     Обрабатывает сообщение из VK — передаём в vk_handlers
     """
+    global vk_bot_instance
+    
     try:
-        # Получаем user_id и text из message_data
-        user_id = message_data.get('user_id')
-        text = message_data.get('text', '').strip()
-        
         from vk_handlers import handle_vk_message as vk_handler
         
-        # Импортируем модуль vk_bot для получения экземпляра
-        import vk_bot as vk_module
-        
         # Проверяем и инициализируем VK бота если нужно
-        if vk_module.vk_bot is None:
+        if vk_bot_instance is None:
             logger.warning("⚠️ VK бот не инициализирован, пробуем инициализировать...")
-            vk_module.init_vk_bot()
+            vk_bot_instance = init_vk_bot()
         
-        if vk_module.vk_bot is None:
+        if vk_bot_instance is None:
             logger.error("❌ VK бот не инициализирован")
             return
         
@@ -179,187 +177,40 @@ async def handle_vk_message(message_data: Dict[str, Any]):
         logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
         import traceback
         traceback.print_exc()
+
+
+def run_vk_bot_in_separate_loop():
+    """
+    Запускает VK бота в отдельном потоке с собственным event loop
+    """
+    global vk_bot_instance, vk_own_loop
+    
+    logger.info("🔄 Запуск VK бота в отдельном потоке со своим event loop...")
+    
+    # Создаём новый event loop для VK бота
+    vk_own_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(vk_own_loop)
+    
+    try:
+        # Инициализируем VK бота
+        vk_bot_instance = init_vk_bot()
         
-        # ===== ОБРАБОТКА КОМАНДЫ /start =====
-        if text == '/start' or text == 'start' or text == 'начать':
-            logger.info(f"📨 VK: получена команда /start от {user_id}")
-            with get_session() as session:
-                company = session.query(Company).filter(Company.owner_id == user_id).first()
-                logger.info(f"📨 VK: компания найдена: {company is not None}")
-            
-            if company:
-                welcome_text = (
-                    f"👋 <b>С возвращением, {company.name_and_industry}!</b>\n\n"
-                    f"📍 {company.location}\n"
-                    f"📅 {company.schedule}\n"
-                    f"💰 {company.salary_range}\n\n"
-                    f"<b>Доступные команды:</b>\n"
-                    f"/new_job — создать новую вакансию\n"
-                    f"/candidates — список кандидатов\n"
-                    f"/filters — управление фильтрами\n"
-                    f"/analytics — аналитика по вакансии\n"
-                    f"/help — справка"
-                )
-            else:
-                welcome_text = (
-                    "👋 <b>Добро пожаловать в GWork HR Bot!</b>\n\n"
-                    "Я помогаю находить кандидатов и автоматизировать HR-процессы.\n\n"
-                    "🔍 <b>Что я умею:</b>\n"
-                    "• Ищу кандидатов в 5+ источниках (HeadHunter, SuperJob, Habr, Trudvsem, Telegram)\n"
-                    "• Автоматически проверяю резюме на соответствие требованиям\n"
-                    "• Общаюсь с кандидатами и провожу предквалификацию\n"
-                    "• Назначаю собеседования и отправляю приглашения\n\n"
-                    "📋 <b>Как создать вакансию:</b>\n"
-                    "1. Напишите /new_job\n"
-                    "2. Укажите роль и город\n"
-                    "3. Задайте параметры поиска\n\n"
-                    "После создания вакансии я начну поиск кандидатов и пришлю результаты сюда!\n\n"
-                    "Для начала работы напишите /onboarding"
-                )
-            
-            logger.info(f"📨 VK: текст сообщения готов, длина: {len(welcome_text)}")
-            logger.info(f"📨 VK: вызываю vk_bot_instance.send_message({user_id}, ...)")
-            
-            try:
-                result = await vk_bot_instance.send_message(user_id, welcome_text)
-                logger.info(f"📨 VK: результат отправки: {result}")
-                if result:
-                    logger.info(f"✅ VK: сообщение успешно отправлено пользователю {user_id}")
-                else:
-                    logger.error(f"❌ VK: send_message вернул False")
-            except Exception as e:
-                logger.error(f"❌ VK: ошибка при отправке: {e}")
-                import traceback
-                traceback.print_exc()
-            return
-        
-        # ===== ОБРАБОТКА КОМАНДЫ /onboarding =====
-        if text == '/onboarding' or text == 'онбординг':
-            logger.info(f"📨 VK: получена команда /onboarding от {user_id}")
-            await vk_bot_instance.send_message(
-                user_id,
-                "📝 <b>Настройка профиля компании доступна только в Telegram боте.</b>\n\n"
-                "Пожалуйста, перейдите в Telegram: @goodWorkingBot\n\n"
-                "Там вы сможете:\n"
-                "• Создать профиль компании\n"
-                "• Настроить фильтры\n"
-                "• Создать вакансию\n"
-                "• Просматривать кандидатов\n\n"
-                "Спасибо за понимание!"
-            )
-            return
-        
-        # ===== ОБРАБОТКА КОМАНДЫ /help =====
-        if text == '/help' or text == 'help' or text == 'помощь':
-            help_text = (
-                "🤖 <b>GWork HR Bot - Справка</b>\n\n"
-                "<b>🔧 НАСТРОЙКА (только в Telegram)</b>\n"
-                "/onboarding — профиль компании\n"
-                "/new_job — новая вакансия\n"
-                "/filters — управление фильтрами\n\n"
-                "<b>👥 КАНДИДАТЫ (только в Telegram)</b>\n"
-                "/candidates — список кандидатов\n"
-                "/analytics — аналитика\n\n"
-                "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
-                "🇭 HeadHunter | 🟢 SuperJob\n"
-                "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
-                "Для полного функционала используйте Telegram бота: @goodWorkingBot\n\n"
-                "По всем вопросам обращайтесь к администратору."
-            )
-            await vk_bot_instance.send_message(user_id, help_text)
-            return
-        
-        # ===== ОБРАБОТКА СООБЩЕНИЙ ОТ КАНДИДАТОВ =====
-        with get_session() as session:
-            candidates = session.query(Candidate).filter(
-                Candidate.contact.like(f"%{user_id}%")
-            ).all()
-            
-            if not candidates:
-                logger.info(f"Кандидат с VK ID {user_id} не найден")
-                return
-            
-            candidate = candidates[0]
-            
-            if candidate.status == CandidateStatus.REJECTED.value:
-                return
-            
-            vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
-            company = session.query(Company).filter(Company.id == vacancy.company_id).first()
-            
-            if not vacancy or not company:
-                return
-            
-            candidate.last_reply = text[:500]
-            candidate.last_reply_at = datetime.now()
-            candidate.last_activity_at = datetime.now()
-            
-            session.commit()
-            
-            await vk_bot_instance.send_message(
-                user_id,
-                "✅ Спасибо за ответ! Ваше сообщение получено."
-            )
+        if vk_bot_instance:
+            logger.info("✅ VK бот инициализирован, запускаем polling...")
+            # Запускаем polling VK бота в этом event loop
+            vk_own_loop.run_until_complete(vk_bot_instance.start_polling(handle_vk_message))
+        else:
+            logger.error("❌ Не удалось инициализировать VK бота")
             
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
+        logger.error(f"❌ Ошибка в VK боте: {e}")
         import traceback
         traceback.print_exc()
-        
-        # ===== ОБРАБОТКА КОМАНДЫ /help =====
-        if text == '/help' or text == 'help' or text == 'помощь':
-            help_text = (
-                "🤖 <b>GWork HR Bot - Справка</b>\n\n"
-                "<b>🔧 НАСТРОЙКА</b>\n"
-                "/onboarding — профиль компании\n"
-                "/new_job — новая вакансия\n"
-                "/filters — управление фильтрами\n\n"
-                "<b>👥 КАНДИДАТЫ</b>\n"
-                "/candidates — список кандидатов\n"
-                "/analytics — аналитика\n\n"
-                "<b>🌐 ИСТОЧНИКИ КАНДИДАТОВ</b>\n"
-                "🇭 HeadHunter | 🟢 SuperJob\n"
-                "👨‍💻 Habr Career | 🏢 Работа в России | ✈️ Telegram\n\n"
-                "По всем вопросам обращайтесь к администратору."
-            )
-            if vk_bot:
-                await vk_bot.send_message(user_id, help_text)
-            return
-        # Ищем кандидата по VK ID в контактах
-        with get_session() as session:
-            # Ищем кандидата, у которого контакт содержит этот VK ID
-            candidates = session.query(Candidate).filter(
-                Candidate.contact.like(f"%{user_id}%")
-            ).all()
-            
-            if not candidates:
-                logger.info(f"Кандидат с VK ID {user_id} не найден")
-                return
-            
-            candidate = candidates[0]  # Берём первого подходящего
-            
-            # Проверяем, не отсеян ли кандидат
-            if candidate.status == CandidateStatus.REJECTED.value:
-                return
-            
-            vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
-            company = session.query(Company).filter(Company.id == vacancy.company_id).first()
-            
-            if not vacancy or not company:
-                return
-            
-            # Обновляем информацию о последнем ответе
-            candidate.last_reply = text[:500]
-            candidate.last_reply_at = datetime.now()
-            candidate.last_activity_at = datetime.now()
-            
-            # Здесь можно добавить логику обработки ответов,
-            # аналогичную той, что в handle_candidate_reply для Telegram
-            
-            session.commit()
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки VK сообщения: {e}")
+    finally:
+        # Очистка
+        if vk_own_loop:
+            vk_own_loop.close()
+            logger.info("🔒 Event loop VK бота закрыт")
 
 
 # ===== ПОИСК РЕАЛЬНЫХ РЕЗЮМЕ В HEADHUNTER =====
@@ -841,6 +692,8 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
     Отправляет сообщение кандидату через Telegram или VK
     Возвращает True если успешно, False если нет
     """
+    global vk_bot_instance
+    
     try:
         contact = candidate.contact
         if not contact:
@@ -876,8 +729,8 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
         vk_match = re.search(r'vk(\d+)|^(\d+)$', contact)
         if vk_match:
             vk_id = vk_match.group(1) or vk_match.group(2)
-            if vk_id and vk_bot:
-                success = vk_bot.send_message_to_candidate(candidate, message_text)
+            if vk_id and vk_bot_instance:
+                success = vk_bot_instance.send_message_to_candidate(candidate, message_text)
                 if success:
                     logger.info(f"✅ Сообщение отправлено VK ID {vk_id}")
                 return success
@@ -1026,7 +879,6 @@ class OnboardingStates(StatesGroup):
     schedule = State()
     salary_range = State()
     tone = State()
-    # interview_how = State()  # Удалено
 
 
 class VacancyStates(StatesGroup):
@@ -1297,12 +1149,11 @@ async def cmd_start(message: Message):
 
 @router.message(Command("onboarding"))
 async def cmd_onboarding(message: Message, state: FSMContext):
-    # Любой может пройти онбординг, проверка не нужна
     await state.set_state(OnboardingStates.name_and_industry)
     await message.answer(
         "📝 <b>Расскажите о компании:</b>\n\n"
         "Название и сфера деятельности.\n"
-        "Например: <i>Салон красоты “Лилия”, услуги маникюра и косметологии</i>",
+        "Например: <i>Салон красоты \"Лилия\", услуги маникюра и косметологии</i>",
         parse_mode="HTML"
     )
 
@@ -1358,14 +1209,10 @@ async def onboarding_tone(message: Message, state: FSMContext):
     tone_value = message.text.strip()
     
     await state.update_data(tone=tone_value)
-    await state.clear()  # Завершаем онбординг
+    await state.clear()
 
     with get_session() as session:
-        company = (
-            session.query(Company)
-            .filter(Company.owner_id == message.from_user.id)
-            .one_or_none()
-        )
+        company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
         if company is None:
             company = Company(owner_id=message.from_user.id)
             session.add(company)
@@ -1375,15 +1222,12 @@ async def onboarding_tone(message: Message, state: FSMContext):
         company.schedule = data.get("schedule", "")
         company.salary_range = data.get("salary_range", "")
         company.tone = tone_value
-        
-        # Инициализируем настройки фильтров
         company.filters_settings = {
             'city': True,
             'salary': True,
             'experience': True,
             'skills': True
         }
-        
         session.commit()
 
     await message.answer(
@@ -1399,11 +1243,7 @@ async def onboarding_tone(message: Message, state: FSMContext):
 @router.message(Command("new_job"))
 async def cmd_new_job(message: Message, state: FSMContext):
     with get_session() as session:
-        company = (
-            session.query(Company)
-            .filter(Company.owner_id == message.from_user.id)
-            .one_or_none()
-        )
+        company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
         if company is None:
             await message.answer("❌ Сначала пройдите онбординг: /onboarding")
             return
@@ -1518,9 +1358,8 @@ async def vacancy_must_have(message: Message, state: FSMContext):
     data = await state.get_data()
     must_have_text = message.text.strip()
     
-    # Проверяем, не хочет ли пользователь пропустить
     if must_have_text == "-" or must_have_text.lower() in ["нет", "нету", "пропустить", "skip"]:
-        must_have_text = "-"  # Ставим прочерк для обозначения "нет требований"
+        must_have_text = "-"
         await message.answer("✅ Критичные требования пропущены")
     else:
         await message.answer(f"✅ Критичные требования сохранены: {must_have_text}")
@@ -1528,11 +1367,7 @@ async def vacancy_must_have(message: Message, state: FSMContext):
     await state.clear()
 
     with get_session() as session:
-        company = (
-            session.query(Company)
-            .filter(Company.owner_id == message.from_user.id)
-            .one()
-        )
+        company = session.query(Company).filter(Company.owner_id == message.from_user.id).one()
         vacancy = Vacancy(
             company_id=company.id,
             role=data["role"],
@@ -1577,7 +1412,6 @@ async def vacancy_must_have(message: Message, state: FSMContext):
         session.add(template)
         session.commit()
         
-        # Обновляем дату последнего поиска
         vacancy.last_search_at = datetime.now()
         session.commit()
 
@@ -1634,12 +1468,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                     is_new=True
                 )
                 
-                # Извлекаем дополнительные данные для фильтров и нормализации
                 c.salary_expectations = extract_salary(c.raw_text)
                 c.experience_years = extract_experience_years(c.raw_text)
                 c.normalized_city = normalize_city(c.city)
                 
-                # Нормализация опыта
                 if c.experience_years:
                     c.normalized_experience_level = normalize_experience_level(c.experience_years)
                 else:
@@ -1648,23 +1480,19 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.experience_years = parsed_years
                         c.normalized_experience_level = normalize_experience_level(parsed_years)
                 
-                # Нормализация навыков
                 if c.skills_text:
                     normalized_skills = normalize_skills_list(c.skills_text)
                     c.extracted_skills = normalized_skills
                     c.skills_text = ", ".join(normalized_skills[:8])
                 
-                # Извлечение города из текста
                 city_from_text = extract_city_from_text(c.raw_text)
                 if city_from_text:
                     c.normalized_city_from_text = city_from_text
                 
-                # Извлечение ключевых слов
                 keywords = extract_keywords(f"{c.experience_text} {c.skills_text} {c.raw_text}")
                 if keywords:
                     c.extracted_keywords = keywords[:20]
                 
-                # Применяем жёсткие фильтры с учётом настроек компании
                 passed, reason = apply_hard_filters(c, vacancy, company)
                 if not passed:
                     c.status = CandidateStatus.REJECTED.value
@@ -1697,12 +1525,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                     is_new=True
                 )
                 
-                # Извлекаем дополнительные данные для фильтров и нормализации
                 c.salary_expectations = extract_salary(c.raw_text)
                 c.experience_years = extract_experience_years(c.raw_text)
                 c.normalized_city = normalize_city(c.city)
                 
-                # Нормализация опыта
                 if c.experience_years:
                     c.normalized_experience_level = normalize_experience_level(c.experience_years)
                 else:
@@ -1711,23 +1537,19 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.experience_years = parsed_years
                         c.normalized_experience_level = normalize_experience_level(parsed_years)
                 
-                # Нормализация навыков
                 if c.skills_text:
                     normalized_skills = normalize_skills_list(c.skills_text)
                     c.extracted_skills = normalized_skills
                     c.skills_text = ", ".join(normalized_skills[:8])
                 
-                # Извлечение города из текста
                 city_from_text = extract_city_from_text(c.raw_text)
                 if city_from_text:
                     c.normalized_city_from_text = city_from_text
                 
-                # Извлечение ключевых слов
                 keywords = extract_keywords(f"{c.experience_text} {c.skills_text} {c.raw_text}")
                 if keywords:
                     c.extracted_keywords = keywords[:20]
                 
-                # Применяем жёсткие фильтры с учётом настроек компании
                 passed, reason = apply_hard_filters(c, vacancy, company)
                 if not passed:
                     c.status = CandidateStatus.REJECTED.value
@@ -1760,12 +1582,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                     is_new=True
                 )
                 
-                # Извлекаем дополнительные данные для фильтров и нормализации
                 c.salary_expectations = extract_salary(c.raw_text)
                 c.experience_years = extract_experience_years(c.raw_text)
                 c.normalized_city = normalize_city(c.city)
                 
-                # Нормализация опыта
                 if c.experience_years:
                     c.normalized_experience_level = normalize_experience_level(c.experience_years)
                 else:
@@ -1774,23 +1594,19 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.experience_years = parsed_years
                         c.normalized_experience_level = normalize_experience_level(parsed_years)
                 
-                # Нормализация навыков
                 if c.skills_text:
                     normalized_skills = normalize_skills_list(c.skills_text)
                     c.extracted_skills = normalized_skills
                     c.skills_text = ", ".join(normalized_skills[:8])
                 
-                # Извлечение города из текста
                 city_from_text = extract_city_from_text(c.raw_text)
                 if city_from_text:
                     c.normalized_city_from_text = city_from_text
                 
-                # Извлечение ключевых слов
                 keywords = extract_keywords(f"{c.experience_text} {c.skills_text} {c.raw_text}")
                 if keywords:
                     c.extracted_keywords = keywords[:20]
                 
-                # Применяем жёсткие фильтры с учётом настроек компании
                 passed, reason = apply_hard_filters(c, vacancy, company)
                 if not passed:
                     c.status = CandidateStatus.REJECTED.value
@@ -1823,12 +1639,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                     is_new=True
                 )
                 
-                # Извлекаем дополнительные данные для фильтров и нормализации
                 c.salary_expectations = extract_salary(c.raw_text)
                 c.experience_years = extract_experience_years(c.raw_text)
                 c.normalized_city = normalize_city(c.city)
                 
-                # Нормализация опыта
                 if c.experience_years:
                     c.normalized_experience_level = normalize_experience_level(c.experience_years)
                 else:
@@ -1837,23 +1651,19 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.experience_years = parsed_years
                         c.normalized_experience_level = normalize_experience_level(parsed_years)
                 
-                # Нормализация навыков
                 if c.skills_text:
                     normalized_skills = normalize_skills_list(c.skills_text)
                     c.extracted_skills = normalized_skills
                     c.skills_text = ", ".join(normalized_skills[:8])
                 
-                # Извлечение города из текста
                 city_from_text = extract_city_from_text(c.raw_text)
                 if city_from_text:
                     c.normalized_city_from_text = city_from_text
                 
-                # Извлечение ключевых слов
                 keywords = extract_keywords(f"{c.experience_text} {c.skills_text} {c.raw_text}")
                 if keywords:
                     c.extracted_keywords = keywords[:20]
                 
-                # Применяем жёсткие фильтры с учётом настроек компании
                 passed, reason = apply_hard_filters(c, vacancy, company)
                 if not passed:
                     c.status = CandidateStatus.REJECTED.value
@@ -1886,12 +1696,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                     is_new=True
                 )
                 
-                # Извлекаем дополнительные данные для фильтров и нормализации
                 c.salary_expectations = extract_salary(c.raw_text)
                 c.experience_years = extract_experience_years(c.raw_text)
                 c.normalized_city = normalize_city(c.city)
                 
-                # Нормализация опыта
                 if c.experience_years:
                     c.normalized_experience_level = normalize_experience_level(c.experience_years)
                 else:
@@ -1900,23 +1708,19 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.experience_years = parsed_years
                         c.normalized_experience_level = normalize_experience_level(parsed_years)
                 
-                # Нормализация навыков
                 if c.skills_text:
                     normalized_skills = normalize_skills_list(c.skills_text)
                     c.extracted_skills = normalized_skills
                     c.skills_text = ", ".join(normalized_skills[:8])
                 
-                # Извлечение города из текста
                 city_from_text = extract_city_from_text(c.raw_text)
                 if city_from_text:
                     c.normalized_city_from_text = city_from_text
                 
-                # Извлечение ключевых слов
                 keywords = extract_keywords(f"{c.experience_text} {c.skills_text} {c.raw_text}")
                 if keywords:
                     c.extracted_keywords = keywords[:20]
                 
-                # Применяем жёсткие фильтры с учётом настроек компании
                 passed, reason = apply_hard_filters(c, vacancy, company)
                 if not passed:
                     c.status = CandidateStatus.REJECTED.value
@@ -1931,12 +1735,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
         session.commit()
         logger.info(f"✅ ВСЕГО найдено кандидатов: {len(candidates)}")
         
-        # Считаем сколько прошло фильтры
         passed_count = len([c for c in candidates if c.status != CandidateStatus.REJECTED.value])
         logger.info(f"✅ Прошли фильтры: {passed_count}")
         logger.info(f"❌ Отсеяно: {len(candidates) - passed_count}")
 
-        # Скоринг через DeepSeek (только для прошедших фильтры)
         filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
         if filtered_candidates:
             vacancy_desc = vacancy_to_description(vacancy, company)
@@ -1968,7 +1770,6 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                         c.score = max(0, min(100, base))
                         c.explanation = "эвристическая оценка по городу"
                     
-                    # Применяем штраф за красные флаги
                     if c.red_flags:
                         penalty = get_red_flags_score(c.raw_text)
                         if penalty > 0:
@@ -2065,7 +1866,6 @@ async def _send_candidates_page(
         await target.answer(summary, parse_mode="HTML")
 
     for c in page_cands:
-        # Показываем только не отсеянных кандидатов
         if c.status != CandidateStatus.REJECTED.value:
             msg = target.message if isinstance(target, CallbackQuery) else target
             await msg.answer(
@@ -2113,12 +1913,10 @@ async def cmd_filters(message: Message):
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
         
-        # Проверяем, есть ли компания
         if not company:
             await message.answer("❌ Сначала пройдите онбординг: /onboarding")
             return
         
-        # Получаем настройки фильтров
         filters_settings = getattr(company, 'filters_settings', {})
         if not filters_settings:
             filters_settings = {
@@ -2167,12 +1965,10 @@ async def cb_filters(callback: CallbackQuery):
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == callback.from_user.id).first()
         
-        # Проверяем, есть ли компания
         if not company:
             await callback.answer("❌ Компания не найдена. Пройдите онбординг: /onboarding", show_alert=True)
             return
         
-        # Получаем или создаём настройки фильтров
         filters_settings = getattr(company, 'filters_settings', {})
         if not filters_settings:
             filters_settings = {
@@ -2207,7 +2003,6 @@ async def cb_filters(callback: CallbackQuery):
             await callback.answer(f"📋 Фильтр по требованиям: {'включён' if filters_settings['skills'] else 'выключен'}")
         
         elif action == "stats":
-            # Статистика отсева
             vacancy = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).first()
             if vacancy:
                 total = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).count()
@@ -2246,7 +2041,6 @@ async def cb_filters(callback: CallbackQuery):
             return
         
         elif action == "archive":
-            # Просмотр архива отсеянных
             vacancy = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).first()
             if vacancy:
                 rejected = session.query(Candidate).filter(
@@ -2270,11 +2064,9 @@ async def cb_filters(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Сохраняем настройки
         company.filters_settings = filters_settings
         session.commit()
         
-        # Обновляем сообщение
         await callback.message.delete()
         await cmd_filters(callback.message)
         await callback.answer()
@@ -2303,14 +2095,12 @@ async def cmd_red_flags(message: Message):
         
         vacancy = vacancies[0]
         
-        # Считаем статистику
         total = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).count()
         with_flags = session.query(Candidate).filter(
             Candidate.vacancy_id == vacancy.id,
             Candidate.red_flags.isnot(None)
         ).count()
         
-        # Получаем частоту разных флагов
         flag_stats = {}
         candidates_with_flags = session.query(Candidate).filter(
             Candidate.vacancy_id == vacancy.id,
@@ -2365,7 +2155,6 @@ async def cmd_stats_normalized(message: Message):
         
         vacancy = vacancies[0]
         
-        # Считаем статистику
         total = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).count()
         
         with_exp_years = session.query(Candidate).filter(
@@ -2464,7 +2253,6 @@ async def cmd_sort(message: Message):
         await message.answer("📭 Нет кандидатов для сортировки")
         return
     
-    # Создаём клавиатуру с вариантами сортировки
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 По оценке", callback_data="sort_candidates:score")
     kb.button(text="📅 По дате (новые)", callback_data="sort_candidates:date")
@@ -2505,7 +2293,6 @@ async def cb_sort_candidates(callback: CallbackQuery):
     
     from export_utils import sort_candidates, filter_by_date
     
-    # Применяем фильтры и сортировку
     if sort_by == 'new':
         filtered = filter_by_date(candidates, days=3)
         sorted_cands = sort_candidates(filtered, sort_by='date')
@@ -2567,7 +2354,6 @@ async def cmd_report_stats(message: Message):
         vacancy = vacancies[0]
         candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).all()
     
-    # Статистика по датам
     now = datetime.now()
     today = sum(1 for c in candidates if c.created_at and c.created_at.date() == now.date())
     yesterday = sum(1 for c in candidates if c.created_at and c.created_at.date() == (now - timedelta(days=1)).date())
@@ -2599,7 +2385,7 @@ async def cmd_report_stats(message: Message):
 
 @router.message(Command("export"))
 async def cmd_export(message: Message):
-    """Экспорт отчёта по кандидатам (только CSV/HTML, для email используйте /send_report)"""
+    """Экспорт отчёта по кандидатам"""
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
         if not company:
@@ -2616,7 +2402,6 @@ async def cmd_export(message: Message):
     
     from export_utils import generate_csv_report, generate_html_report
     
-    # Только CSV и HTML, без кнопки email
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 CSV", callback_data="export:csv")
     kb.button(text="📊 HTML", callback_data="export:html")
@@ -2634,7 +2419,7 @@ async def cmd_export(message: Message):
 
 
 @router.callback_query(F.data.startswith("export:"))
-async def cb_export(callback: CallbackQuery, state: FSMContext):
+async def cb_export(callback: CallbackQuery):
     """Обработка экспорта (только CSV и HTML)"""
     export_format = callback.data.split(":")[1]
     
@@ -2781,7 +2566,6 @@ async def cmd_conversion(message: Message):
     
     text = f"📊 <b>Воронка конверсии</b>\n\n"
     
-    # Рисуем прогресс-бар
     def progress_bar(value, total, width=20):
         if total == 0:
             return "░" * width
@@ -2839,7 +2623,6 @@ async def process_set_email(message: Message, state: FSMContext):
     """Обработка ввода email"""
     email = message.text.strip()
     
-    # Простая валидация email
     if '@' not in email or '.' not in email:
         await message.answer("❌ Некорректный email. Попробуйте ещё раз:")
         return
@@ -2971,10 +2754,8 @@ async def cmd_calendar_setup(message: Message):
         
         client = YandexCalendarClient(message.from_user.id)
         
-        # Получаем события на сегодня для проверки
         events = client.get_events(days=1)
         
-        # Сохраняем статус в компании
         with get_session() as session:
             company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
             if company:
@@ -3020,7 +2801,6 @@ async def cmd_calendar_test(message: Message):
         
         client = YandexCalendarClient(message.from_user.id)
         
-        # Получаем слоты на завтра
         tomorrow = datetime.now().date() + timedelta(days=1)
         slots = client.get_free_slots(tomorrow, duration_minutes=60)
         
@@ -3065,10 +2845,8 @@ async def cmd_calendar_events(message: Message):
         
         text = "📅 <b>События на ближайшую неделю:</b>\n\n"
         for event in events[:10]:
-            # Форматируем время
             start_time = event['start']
             if 'T' in start_time:
-                # 2026-03-13T15:00:00+03:00 -> 13.03.2026 15:00
                 date_part = start_time.split('T')[0]
                 time_part = start_time.split('T')[1][:5]
                 formatted_date = f"{date_part[8:10]}.{date_part[5:7]}.{date_part[:4]} {time_part}"
@@ -3104,7 +2882,6 @@ async def cb_invite(callback: CallbackQuery):
             await callback.answer("❌ Кандидат не найден", show_alert=True)
             return
         
-        # Проверяем, не отсеян ли кандидат
         if candidate.status == CandidateStatus.REJECTED.value:
             await callback.answer("❌ Кандидат отсеян фильтрами", show_alert=True)
             return
@@ -3256,7 +3033,6 @@ async def handle_candidate_reply(message: Message):
         if not candidate:
             return
         
-        # Проверяем, не отсеян ли кандидат
         if candidate.status == CandidateStatus.REJECTED.value:
             return
         
@@ -3273,29 +3049,23 @@ async def handle_candidate_reply(message: Message):
         current_step = getattr(candidate, 'dialog_step', 1)
         
         if current_step == 1:
-            # Сохраняем ответ на первый вопрос (график)
             candidate.answers_schedule = message.text[:500]
             candidate.dialog_step = 2
             
-            # Отправляем второй вопрос
             reply_text = generate_followup_message(candidate, vacancy, company, step=2)
             await send_message_to_candidate(candidate, reply_text)
             
         elif current_step == 2:
-            # Сохраняем ответ на второй вопрос (зарплата)
             candidate.answers_salary = message.text[:500]
             candidate.dialog_step = 3
             
-            # Отправляем третий вопрос
             reply_text = generate_followup_message(candidate, vacancy, company, step=3)
             await send_message_to_candidate(candidate, reply_text)
             
         elif current_step == 3:
-            # Сохраняем ответ на третий вопрос (сроки)
             candidate.answers_timing = message.text[:500]
             candidate.dialog_step = 4
             
-            # Анализируем все ответы
             from pre_qualification import PreQualificationAnalyzer, format_qualification_results
             
             answers = {
@@ -3307,21 +3077,17 @@ async def handle_candidate_reply(message: Message):
             analyzer = PreQualificationAnalyzer(candidate, vacancy, company)
             results = analyzer.analyze_all(answers)
             
-            # Сохраняем результаты
             candidate.qualification_score = results['total_score']
             candidate.qualification_details = results
             candidate.qualification_date = datetime.now()
             candidate.qualification_history = results.get('history', [])
             candidate.extracted_keywords_from_answers = results.get('keywords', [])
             
-            # Снимаем флаг нового кандидата после взаимодействия
             candidate.is_new = False
             
-            # Принимаем решение
             if results['verdict'] == 'lead':
                 candidate.status = CandidateStatus.QUALIFIED.value
                 
-                # Получаем реальные слоты из календаря, если он настроен
                 try:
                     from yandex_calendar import YandexCalendarClient
                     
@@ -3333,11 +3099,9 @@ async def handle_candidate_reply(message: Message):
                         slots_tomorrow = client.get_free_slots(tomorrow, duration_minutes=60)
                         slots_day_after = client.get_free_slots(day_after, duration_minutes=60)
                         
-                        # Объединяем слоты
                         all_slots = slots_tomorrow + slots_day_after
                         test_slots = all_slots[:3] if all_slots else []
                     else:
-                        # Если календарь не настроен, используем тестовые слоты
                         test_slots = [
                             {'start': datetime.now() + timedelta(hours=24), 'end': datetime.now() + timedelta(hours=25), 'text': '10:00 - 11:00 (тест)'},
                             {'start': datetime.now() + timedelta(hours=26), 'end': datetime.now() + timedelta(hours=27), 'text': '12:00 - 13:00 (тест)'},
@@ -3365,7 +3129,6 @@ async def handle_candidate_reply(message: Message):
             elif results['verdict'] == 'clarify':
                 candidate.status = CandidateStatus.CLARIFY.value
                 
-                # Генерируем уточняющие вопросы
                 questions = analyzer.generate_followup_questions(results)
                 if questions:
                     reply_text = (
@@ -3378,9 +3141,9 @@ async def handle_candidate_reply(message: Message):
                         f"Спасибо за ответы! Мне нужно уточнить некоторые детали. "
                         f"Мы скоро свяжемся с вами."
                     )
-                candidate.dialog_step = 5  # Шаг уточнения
+                candidate.dialog_step = 5
                 
-            else:  # reject
+            else:
                 candidate.status = CandidateStatus.REJECTED.value
                 candidate.rejection_reason = "Не прошёл предквалификацию"
                 reply_text = (
@@ -3389,10 +3152,8 @@ async def handle_candidate_reply(message: Message):
                     f"когда появится подходящее предложение. Хорошего дня!"
                 )
             
-            # Отправляем ответ
             await send_message_to_candidate(candidate, reply_text)
             
-            # Уведомляем администратора
             admin_text = format_qualification_results(results)
             await bot.send_message(
                 chat_id=company.owner_id,
@@ -3401,7 +3162,6 @@ async def handle_candidate_reply(message: Message):
             )
             
         elif current_step == 4:
-            # Обработка выбора времени с созданием события в календаре
             try:
                 choice = int(message.text.strip())
                 if 1 <= choice <= 3 and candidate.available_slots:
@@ -3409,27 +3169,22 @@ async def handle_candidate_reply(message: Message):
                     if slots_data and len(slots_data) >= choice:
                         selected_slot = slots_data[choice - 1]
                         
-                        # Сохраняем выбранный слот
                         candidate.interview_slot_text = selected_slot['text']
                         candidate.status = CandidateStatus.INTERVIEW.value
                         candidate.dialog_step = 6
                         
-                        # Пытаемся создать событие в календаре
                         calendar_note = ""
                         event = None
                         
                         try:
                             from yandex_calendar import YandexCalendarClient
                             
-                            # Проверяем, настроен ли календарь
                             if settings.yandex_login and settings.yandex_app_password:
                                 client = YandexCalendarClient(company.owner_id)
                                 
-                                # Парсим время из выбранного слота
                                 start_time = datetime.fromisoformat(selected_slot['start'])
                                 end_time = datetime.fromisoformat(selected_slot['end'])
                                 
-                                # Создаём событие
                                 event = client.create_event(
                                     summary=f"Собеседование: {vacancy.role} - {candidate.name_or_nick}",
                                     description=f"Кандидат: {candidate.name_or_nick}\n"
@@ -3442,7 +3197,7 @@ async def handle_candidate_reply(message: Message):
                                     start_time=start_time,
                                     end_time=end_time,
                                     attendees=[company.report_email] if company.report_email else None,
-                                    reminders=[30, 60]  # Напоминания за 30 и 60 минут
+                                    reminders=[30, 60]
                                 )
                                 
                                 if event:
@@ -3458,11 +3213,9 @@ async def handle_candidate_reply(message: Message):
                             logger.error(f"Ошибка создания события в календаре: {e}")
                             calendar_note = "\n\n⚠️ Ошибка синхронизации с календарём."
                         
-                        # Отправляем подтверждение кандидату
                         reply_text = generate_followup_message(candidate, vacancy, company, step=6) + calendar_note
                         await send_message_to_candidate(candidate, reply_text)
                         
-                        # Уведомляем администратора
                         admin_text = f"✅ <b>Кандидат выбрал время!</b>\n\n"
                         admin_text += f"Кандидат: {candidate.name_or_nick}\n"
                         admin_text += f"Выбранное время: {selected_slot['text']}\n"
@@ -3481,10 +3234,8 @@ async def handle_candidate_reply(message: Message):
                 pass
         
         elif current_step == 5:
-            # Обработка уточняющих вопросов
             candidate.answers_clarify = message.text[:500]
             
-            # Повторный анализ с новыми ответами
             from pre_qualification import PreQualificationAnalyzer, format_qualification_results
             
             answers = {
@@ -3504,9 +3255,8 @@ async def handle_candidate_reply(message: Message):
             
             if results['verdict'] == 'lead':
                 candidate.status = CandidateStatus.QUALIFIED.value
-                candidate.dialog_step = 4  # Переходим к выбору времени
+                candidate.dialog_step = 4
                 
-                # Получаем реальные слоты из календаря
                 try:
                     from yandex_calendar import YandexCalendarClient
                     
@@ -3546,7 +3296,6 @@ async def handle_candidate_reply(message: Message):
                 reply_text = generate_followup_message(candidate, vacancy, company, step=4, slots=test_slots)
                 await send_message_to_candidate(candidate, reply_text)
                 
-                # Уведомляем администратора
                 admin_text = format_qualification_results(results)
                 await bot.send_message(
                     chat_id=company.owner_id,
@@ -3689,9 +3438,9 @@ async def cmd_help_hr(message: Message):
 
 
 @router.callback_query(lambda c: c.data == "search")
-async def cb_search(callback: CallbackQuery, state: FSMContext):
+async def cb_search(callback: CallbackQuery):
     await callback.answer()
-    await cmd_find(callback.message, state)
+    await cmd_find(callback.message)
 
 
 @router.callback_query(lambda c: c.data == "candidates")
@@ -3713,7 +3462,7 @@ async def cb_help(callback: CallbackQuery):
 
 
 @router.message(Command("find"))
-async def cmd_find(message: Message, state: FSMContext):
+async def cmd_find(message: Message):
     """Поиск кандидатов (заглушка)"""
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
@@ -3730,6 +3479,8 @@ async def cmd_find(message: Message, state: FSMContext):
 
 
 async def main() -> None:
+    global vk_thread, vk_own_loop, vk_bot_instance
+    
     init_db()
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN не задан в .env")
@@ -3747,24 +3498,25 @@ async def main() -> None:
     logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
     logger.info("=" * 60)
     
-    # Запускаем веб-сервер для Render health checks
+    # Запускаем веб-сервер для Render health checks в отдельном потоке
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-    logger.info("🌐 Веб-сервер для health checks запущен")
+    logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
     
-    # Удаляем webhook, чтобы не было конфликта
+    # Удаляем webhook Telegram, чтобы не было конфликта
     await bot.delete_webhook()
-    logger.info("✅ Webhook удалён, используем polling")
+    logger.info("✅ Webhook Telegram удалён")
     
-    # Запускаем VK бота (если есть токен)
+    # ЗАПУСКАЕМ VK БОТА В ОТДЕЛЬНОМ ПОТОКЕ СО СВОИМ EVENT LOOP
     if settings.has_vk:
-        vk_bot_instance = init_vk_bot()
-        if vk_bot_instance:
-            asyncio.create_task(vk_bot_instance.start_polling(handle_vk_message))
-            logger.info("📱 VK бот запущен в фоновом режиме")
+        vk_thread = threading.Thread(target=run_vk_bot_in_separate_loop, daemon=True)
+        vk_thread.start()
+        logger.info("📱 VK бот запущен в отдельном потоке со своим event loop'ом")
+    else:
+        logger.info("📱 VK бот не запущен (VK_TOKEN не настроен)")
     
-    # Запускаем Telegram бота
-    logger.info("🤖 Запускаем Telegram бота...")
+    # Запускаем Telegram бота в основном потоке (главный event loop)
+    logger.info("🤖 Запускаем Telegram бота в основном event loop...")
     await dp.start_polling(bot)
 
 
