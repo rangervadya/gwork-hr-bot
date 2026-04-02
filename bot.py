@@ -106,6 +106,32 @@ def clean_html(text: str) -> str:
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
 
+@app.route('/reset_webhook')
+def reset_webhook():
+    """Эндпоинт для сброса webhook Telegram"""
+    import asyncio
+    try:
+        # Создаём новый event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Удаляем webhook
+        async def reset():
+            await bot.delete_webhook()
+            info = await bot.get_webhook_info()
+            return info
+        
+        info = loop.run_until_complete(reset())
+        loop.close()
+        
+        return jsonify({
+            'status': 'ok',
+            'message': 'Webhook удалён',
+            'webhook_url': info.url if info else 'None'
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С VK =====
 
