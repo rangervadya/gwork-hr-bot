@@ -1,4 +1,4 @@
-# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support
+# FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support + Auto-invites
 # ВЕРСИЯ С РАЗДЕЛЬНЫМИ EVENT LOOP ДЛЯ VK И TELEGRAM
 
 import asyncio
@@ -213,6 +213,39 @@ def run_vk_bot_in_separate_loop():
             logger.info("🔒 Event loop VK бота закрыт")
 
 
+# ===== АВТОМАТИЧЕСКИЕ ПРИГЛАШЕНИЯ ДЛЯ ТОП-КАНДИДАТОВ =====
+async def auto_invite_top_candidates(vacancy_id: int, company: Company, vacancy: Vacancy):
+    """Автоматически приглашает кандидатов с высоким рейтингом"""
+    with get_session() as session:
+        top_candidates = session.query(Candidate).filter(
+            Candidate.vacancy_id == vacancy_id,
+            Candidate.score >= 80,
+            Candidate.status == CandidateStatus.FILTERED.value
+        ).all()
+        
+        invited_count = 0
+        for candidate in top_candidates:
+            # Проверяем, есть ли контакт (Telegram username)
+            if candidate.contact and candidate.contact.startswith('@'):
+                invite_text = generate_invite_message(candidate, vacancy, company)
+                try:
+                    await bot.send_message(
+                        chat_id=candidate.contact,
+                        text=invite_text,
+                        parse_mode="HTML"
+                    )
+                    candidate.status = CandidateStatus.INVITED.value
+                    invited_count += 1
+                    logger.info(f"✅ Авто-приглашение отправлено {candidate.name_or_nick} ({candidate.contact})")
+                    await asyncio.sleep(0.5)  # Пауза, чтобы не спамить
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки приглашения {candidate.name_or_nick}: {e}")
+        
+        if invited_count > 0:
+            logger.info(f"📨 Отправлено {invited_count} авто-приглашений")
+            session.commit()
+
+
 # ===== ПОИСК РЕАЛЬНЫХ РЕЗЮМЕ В HEADHUNTER =====
 async def search_hh_resumes(query: str, city: str, limit: int = 10) -> List[Dict[str, Any]]:
     """
@@ -304,11 +337,11 @@ async def search_hh_resumes(query: str, city: str, limit: int = 10) -> List[Dict
                     experience_text = []
                     for exp in experience_items[:3]:
                         position = exp.get("position", "")
-                        company = exp.get("company", "")
+                        company_name = exp.get("company", "")
                         start = exp.get("start", "")
                         end = exp.get("end", "настоящее время")
-                        if position and company:
-                            experience_text.append(f"{position} в {company} ({start}-{end})")
+                        if position and company_name:
+                            experience_text.append(f"{position} в {company_name} ({start}-{end})")
                     
                     experience_str = "\n".join(experience_text) if experience_text else "Опыт не указан"
                     
@@ -562,9 +595,9 @@ async def search_habr_candidates(query: str, city: str, limit: int = 10) -> List
                     experience_text = []
                     for exp in experience_items[:3]:
                         position = exp.get("position", "")
-                        company = exp.get("company", "")
-                        if position and company:
-                            experience_text.append(f"{position} в {company}")
+                        company_name = exp.get("company", "")
+                        if position and company_name:
+                            experience_text.append(f"{position} в {company_name}")
                     
                     skills = resume_data.get("skills", "")
                     skills_list = [s.strip() for s in skills.split(",")] if skills else []
@@ -643,8 +676,8 @@ async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> 
                     
                     name = vacancy.get("job-name", "Без названия")
                     
-                    company = vacancy.get("company", {})
-                    company_name = company.get("short_name") or company.get("name", "Не указана")
+                    company_name = vacancy.get("company", {})
+                    company_name_str = company_name.get("short_name") or company_name.get("name", "Не указана")
                     
                     salary_min = vacancy.get("salary_min", "")
                     salary_max = vacancy.get("salary_max", "")
@@ -667,7 +700,7 @@ async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> 
                         "city": city,
                         "experience": experience,
                         "skills": [query],
-                        "about": f"Компания: {company_name}\n💰 {salary_text}",
+                        "about": f"Компания: {company_name_str}\n💰 {salary_text}",
                         "source": "trudvsem",
                         "url": vacancy_url,
                         "contact": "",
@@ -1096,6 +1129,8 @@ def build_candidate_keyboard(candidate_id: int) -> InlineKeyboardMarkup:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    dev_info = "\n\n📧 По вопросам разработки и интеграции: rangercompany@yandex.ru"
+    
     # Проверяем, есть ли профиль компании
     with get_session() as session:
         company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
@@ -1128,7 +1163,7 @@ async def cmd_start(message: Message):
             f"/send_report — отправить отчёт на email\n"
             f"/analytics — аналитика по вакансии\n"
             f"/calendar_setup — настроить Яндекс.Календарь\n"
-            f"/set_email — настроить email для отчётов",
+            f"/set_email — настроить email для отчётов{dev_info}",
             parse_mode="HTML",
             reply_markup=kb
         )
@@ -1142,7 +1177,8 @@ async def cmd_start(message: Message):
             "• 🏢 Работа в России\n"
             "• ✈️ Telegram\n\n"
             "Я умею автоматически общаться с кандидатами и проводить предквалификацию!\n\n"
-            "Для начала работы введите /onboarding",
+            "Для начала работы введите /onboarding"
+            f"{dev_info}",
             parse_mode="HTML"
         )
 
@@ -1788,6 +1824,10 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                 logger.info("✅ Скоринг завершён")
             except Exception as e:
                 logger.error(f"❌ Ошибка скоринга: {e}")
+        
+        # === АВТОМАТИЧЕСКИЕ ПРИГЛАШЕНИЯ ДЛЯ ТОП-КАНДИДАТОВ ===
+        if filtered_candidates:
+            await auto_invite_top_candidates(vacancy_id, company, vacancy)
 
 
 def group_candidates_for_report(vacancy_id: int):
