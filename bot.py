@@ -3897,6 +3897,7 @@ async def cmd_find(message: Message):
         "Пока вы можете просматривать уже найденных кандидатов через /candidates",
         parse_mode="HTML"
     )
+
 @router.message(Command("recalculate"))
 async def cmd_recalculate(message: Message):
     """Пересчитать оценки всех кандидатов по текущей вакансии"""
@@ -3919,22 +3920,109 @@ async def cmd_recalculate(message: Message):
         recalculated = 0
         for candidate in candidates:
             if candidate.status != CandidateStatus.REJECTED.value or candidate.score < 60:
-                score, explanation_parts = calculate_candidate_score(candidate, vacancy, company)
+                # Локальная функция оценки, чтобы не было зависимости от порядка объявления
+                score = 50
+                explanation_parts = []
                 
+                # 1. Город (20 баллов)
+                if vacancy.city.lower() in candidate.city.lower():
+                    score += 20
+                    explanation_parts.append("🏙️ Город совпадает: +20")
+                elif candidate.normalized_city and vacancy.city.lower() in candidate.normalized_city.lower():
+                    score += 15
+                    explanation_parts.append("🏙️ Город (нормализованный) совпадает: +15")
+                else:
+                    score += 5
+                    explanation_parts.append("🏙️ Город не совпадает: +5")
+                
+                # 2. Опыт (25 баллов)
+                if candidate.experience_years:
+                    exp_years = candidate.experience_years
+                    if exp_years >= 5:
+                        score += 25
+                        explanation_parts.append(f"💼 Опыт {exp_years} лет: +25")
+                    elif exp_years >= 3:
+                        score += 20
+                        explanation_parts.append(f"💼 Опыт {exp_years} лет: +20")
+                    elif exp_years >= 1:
+                        score += 12
+                        explanation_parts.append(f"💼 Опыт {exp_years} лет: +12")
+                    else:
+                        score += 5
+                        explanation_parts.append(f"💼 Опыт {exp_years} лет: +5")
+                else:
+                    score += 10
+                    explanation_parts.append("💼 Опыт не указан: +10")
+                
+                # 3. Навыки (25 баллов)
+                must_have = vacancy.must_have if vacancy.must_have and vacancy.must_have != "-" else ""
+                if must_have:
+                    must_have_list = [skill.strip().lower() for skill in must_have.split(",")]
+                    candidate_skills = (candidate.skills_text or "").lower()
+                    found = sum(1 for skill in must_have_list if skill in candidate_skills)
+                    if found > 0:
+                        skill_points = min(25, int((found / len(must_have_list)) * 25))
+                        score += skill_points
+                        explanation_parts.append(f"📋 Найдено {found}/{len(must_have_list)} навыков: +{skill_points}")
+                    else:
+                        score += 5
+                        explanation_parts.append("📋 Требуемые навыки не найдены: +5")
+                else:
+                    score += 15
+                    explanation_parts.append("📋 Нет требований к навыкам: +15")
+                
+                # 4. Зарплата (15 баллов)
+                if candidate.salary_expectations and (vacancy.salary_from or vacancy.salary_to):
+                    salary_expected = candidate.salary_expectations
+                    salary_min = vacancy.salary_from or 0
+                    salary_max = vacancy.salary_to or float('inf')
+                    if salary_min <= salary_expected <= salary_max:
+                        score += 15
+                        explanation_parts.append(f"💰 Зарплата {salary_expected} в вилке: +15")
+                    elif salary_expected < salary_min:
+                        score += 8
+                        explanation_parts.append(f"💰 Зарплата ниже вилки: +8")
+                    else:
+                        score += 5
+                        explanation_parts.append(f"💰 Зарплата выше вилки: +5")
+                else:
+                    score += 7
+                    explanation_parts.append("💰 Зарплата не указана: +7")
+                
+                # 5. Качество резюме (15 баллов)
+                text_length = len(candidate.raw_text or "")
+                if text_length > 500:
+                    score += 15
+                    explanation_parts.append(f"📝 Подробное резюме: +15")
+                elif text_length > 200:
+                    score += 10
+                    explanation_parts.append(f"📝 Хорошее резюме: +10")
+                elif text_length > 50:
+                    score += 5
+                    explanation_parts.append(f"📝 Короткое резюме: +5")
+                else:
+                    score += 2
+                    explanation_parts.append("📝 Очень краткое резюме: +2")
+                
+                # Штраф за красные флаги
                 if candidate.red_flags:
-                    penalty = get_red_flags_score(candidate.raw_text)
-                    if penalty > 0:
-                        score = max(0, score - penalty)
-                        explanation_parts.append(f"🚩 Штраф за красные флаги: -{penalty}")
+                    try:
+                        from filters import get_red_flags_score
+                        penalty = get_red_flags_score(candidate.raw_text)
+                        if penalty > 0:
+                            score = max(0, score - penalty)
+                            explanation_parts.append(f"🚩 Штраф за красные флаги: -{penalty}")
+                    except:
+                        pass
                 
-                candidate.score = score
+                candidate.score = min(100, score)
                 candidate.explanation = " | ".join(explanation_parts)
                 
                 if candidate.score >= 80:
                     candidate.status = CandidateStatus.FILTERED.value
                 elif candidate.score < 60:
                     candidate.status = CandidateStatus.REJECTED.value
-                    candidate.rejection_reason = f"Низкая оценка после пересчёта: {score}/100"
+                    candidate.rejection_reason = f"Низкая оценка после пересчёта: {candidate.score}/100"
                 
                 recalculated += 1
         
@@ -3946,12 +4034,58 @@ async def cmd_recalculate(message: Message):
             f"🎯 Новая оценка учитывает:\n"
             f"• Город (до 20 баллов)\n"
             f"• Опыт (до 25 баллов)\n"
-            f"• Навыки (до 30 баллов)\n"
+            f"• Навыки (до 25 баллов)\n"
             f"• Зарплату (до 15 баллов)\n"
-            f"• Качество резюме (до 10 баллов)\n\n"
+            f"• Качество резюме (до 15 баллов)\n\n"
             f"Посмотреть обновлённые оценки: /candidates",
             parse_mode="HTML"
         )
+
+
+async def main() -> None:
+    global vk_thread, vk_own_loop, vk_bot_instance
+    
+    init_db()
+    if not settings.bot_token:
+        raise RuntimeError("BOT_TOKEN не задан в .env")
+    
+    logger.info("=" * 60)
+    logger.info("🚀 ЗАПУСК GWork HR BOT")
+    logger.info("=" * 60)
+    logger.info(f"✅ BOT_TOKEN: {'установлен' if settings.bot_token else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ HH_API_TOKEN: {'установлен' if settings.hh_api_token else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ SUPERJOB_API_KEY: {'установлен' if settings.superjob_api_key else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ HABR_CLIENT_ID: {'установлен' if settings.habr_client_id else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ DEEPSEEK_API_KEY: {'установлен' if settings.deepseek_api_key else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ VK_TOKEN: {'установлен' if settings.vk_token else 'НЕ УСТАНОВЛЕН'}")
+    logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
+    logger.info("=" * 60)
+    
+    # Запускаем веб-сервер для Render health checks в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
+    
+    # Удаляем webhook Telegram, чтобы не было конфликта
+    await bot.delete_webhook()
+    logger.info("✅ Webhook Telegram удалён")
+    
+    # ЗАПУСКАЕМ VK БОТА В ОТДЕЛЬНОМ ПОТОКЕ СО СВОИМ EVENT LOOP
+    if settings.has_vk:
+        vk_thread = threading.Thread(target=run_vk_bot_in_separate_loop, daemon=True)
+        vk_thread.start()
+        logger.info("📱 VK бот запущен в отдельном потоке со своим event loop'ом")
+    else:
+        logger.info("📱 VK бот не запущен (VK_TOKEN не настроен)")
+    
+    # Запускаем Telegram бота в основном потоке (главный event loop)
+    logger.info("🤖 Запускаем Telegram бота в основном event loop...")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 async def main() -> None:
     global vk_thread, vk_own_loop, vk_bot_instance
