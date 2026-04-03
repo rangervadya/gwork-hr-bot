@@ -2162,7 +2162,7 @@ async def gather_real_candidates(vacancy_id: int) -> None:
         logger.info(f"✅ Прошли фильтры: {passed_count}")
         logger.info(f"❌ Отсеяно: {len(candidates) - passed_count}")
 
-                filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
+                        filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
         if filtered_candidates:
             vacancy_desc = vacancy_to_description(vacancy, company)
             payload = [
@@ -2177,34 +2177,151 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                 for c in filtered_candidates
             ]
 
-            # Используем улучшенную функцию скоринга с fallback
+            # Пытаемся использовать DeepSeek API
+            deepseek_success = False
             try:
-                scores_dict = await score_candidates_with_fallback(vacancy_desc, payload, vacancy, company)
+                scores = deepseek.score_candidates(vacancy_desc, payload)
+                scores_by_id = {int(s["id"]): s for s in scores if "id" in s}
                 
-                for c in filtered_candidates:
-                    result = scores_dict.get(c.id)
-                    if result:
-                        c.score = int(result.get("score", 0))
-                        c.explanation = str(result.get("explanation", ""))
-                    else:
-                        c.score = 50
-                        c.explanation = "Базовая оценка (API недоступен)"
+                # Проверяем, что оценки не все одинаковые
+                unique_scores = set(int(s.get("score", 0)) for s in scores if "score" in s)
+                if len(unique_scores) > 1:
+                    deepseek_success = True
+                    logger.info(f"✅ DeepSeek вернул оценки: {unique_scores}")
                     
-                    logger.info(f"📊 Кандидат {c.name_or_nick}: оценка {c.score}/100 - {c.explanation[:100]}")
-                    
-                    if c.score >= 80:
-                        c.status = CandidateStatus.FILTERED.value
-                    elif c.score >= 60:
-                        c.status = CandidateStatus.FOUND.value
-                    else:
-                        c.status = CandidateStatus.REJECTED.value
-                        if not c.rejection_reason:
-                            c.rejection_reason = f"Низкая оценка: {c.score}/100"
-                
-                session.commit()
-                logger.info("✅ Скоринг завершён")
+                    for c in filtered_candidates:
+                        result = scores_by_id.get(c.id)
+                        if result:
+                            c.score = int(result.get("score", 0))
+                            c.explanation = str(result.get("explanation", ""))
+                        else:
+                            # Fallback для кандидатов без оценки
+                            c.score = 50
+                            c.explanation = "Оценка не получена от API"
+                else:
+                    logger.warning(f"⚠️ DeepSeek вернул одинаковые оценки: {unique_scores}")
             except Exception as e:
-                logger.error(f"❌ Ошибка скоринга: {e}")
+                logger.error(f"❌ Ошибка DeepSeek API: {e}")
+            
+            # Если DeepSeek не сработал или вернул плохие оценки - используем локальный алгоритм
+            if not deepseek_success:
+                logger.info("📊 Используем локальный алгоритм оценки")
+                for c in filtered_candidates:
+                    score = 50
+                    explanation_parts = []
+                    
+                    # 1. Город (до 20 баллов)
+                    if vacancy.city.lower() in c.city.lower():
+                        score += 20
+                        explanation_parts.append("🏙️ Город совпадает: +20")
+                    elif c.normalized_city and vacancy.city.lower() in c.normalized_city.lower():
+                        score += 15
+                        explanation_parts.append("🏙️ Город (нормализованный) совпадает: +15")
+                    else:
+                        score += 5
+                        explanation_parts.append("🏙️ Город не совпадает: +5")
+                    
+                    # 2. Опыт (до 25 баллов)
+                    if c.experience_years:
+                        exp_years = c.experience_years
+                        if exp_years >= 5:
+                            score += 25
+                            explanation_parts.append(f"💼 Опыт {exp_years} лет (эксперт): +25")
+                        elif exp_years >= 3:
+                            score += 20
+                            explanation_parts.append(f"💼 Опыт {exp_years} лет (хорошо): +20")
+                        elif exp_years >= 1:
+                            score += 12
+                            explanation_parts.append(f"💼 Опыт {exp_years} лет (начальный): +12")
+                        else:
+                            score += 5
+                            explanation_parts.append(f"💼 Опыт {exp_years} лет (мало): +5")
+                    else:
+                        score += 10
+                        explanation_parts.append("💼 Опыт не указан: +10")
+                    
+                    # 3. Навыки (до 25 баллов)
+                    must_have = vacancy.must_have if vacancy.must_have and vacancy.must_have != "-" else ""
+                    if must_have:
+                        must_have_list = [skill.strip().lower() for skill in must_have.split(",")]
+                        candidate_skills = (c.skills_text or "").lower()
+                        found = sum(1 for skill in must_have_list if skill in candidate_skills)
+                        if found > 0:
+                            skill_points = min(25, int((found / len(must_have_list)) * 25))
+                            score += skill_points
+                            explanation_parts.append(f"📋 Найдено {found}/{len(must_have_list)} навыков: +{skill_points}")
+                        else:
+                            score += 5
+                            explanation_parts.append("📋 Требуемые навыки не найдены: +5")
+                    else:
+                        score += 15
+                        explanation_parts.append("📋 Нет требований к навыкам: +15")
+                    
+                    # 4. Зарплата (до 15 баллов)
+                    if c.salary_expectations and (vacancy.salary_from or vacancy.salary_to):
+                        salary_expected = c.salary_expectations
+                        salary_min = vacancy.salary_from or 0
+                        salary_max = vacancy.salary_to or float('inf')
+                        if salary_min <= salary_expected <= salary_max:
+                            score += 15
+                            explanation_parts.append(f"💰 Зарплата {salary_expected} в вилке: +15")
+                        elif salary_expected < salary_min:
+                            score += 8
+                            explanation_parts.append(f"💰 Зарплата ниже вилки: +8")
+                        else:
+                            score += 5
+                            explanation_parts.append(f"💰 Зарплата выше вилки: +5")
+                    else:
+                        score += 7
+                        explanation_parts.append("💰 Зарплата не указана: +7")
+                    
+                    # 5. Качество резюме (до 15 баллов)
+                    text_length = len(c.raw_text or "")
+                    if text_length > 500:
+                        score += 15
+                        explanation_parts.append("📝 Подробное резюме: +15")
+                    elif text_length > 200:
+                        score += 10
+                        explanation_parts.append("📝 Хорошее резюме: +10")
+                    elif text_length > 50:
+                        score += 5
+                        explanation_parts.append("📝 Короткое резюме: +5")
+                    else:
+                        score += 2
+                        explanation_parts.append("📝 Очень краткое резюме: +2")
+                    
+                    c.score = min(100, score)
+                    c.explanation = " | ".join(explanation_parts)
+            
+            # Применяем штрафы за красные флаги (для всех кандидатов)
+            for c in filtered_candidates:
+                if c.red_flags:
+                    try:
+                        penalty = get_red_flags_score(c.raw_text)
+                        if penalty > 0:
+                            old_score = c.score
+                            c.score = max(0, c.score - penalty)
+                            if c.explanation:
+                                c.explanation += f" | 🚩 Штраф за красные флаги: -{penalty}"
+                            else:
+                                c.explanation = f"Штраф за красные флаги: -{penalty}"
+                            logger.info(f"Кандидат {c.name_or_nick}: скор снижен с {old_score} до {c.score} (штраф {penalty})")
+                    except:
+                        pass
+                
+                logger.info(f"📊 Кандидат {c.name_or_nick}: оценка {c.score}/100")
+                
+                if c.score >= 80:
+                    c.status = CandidateStatus.FILTERED.value
+                elif c.score >= 60:
+                    c.status = CandidateStatus.FOUND.value
+                else:
+                    c.status = CandidateStatus.REJECTED.value
+                    if not c.rejection_reason:
+                        c.rejection_reason = f"Низкая оценка: {c.score}/100"
+            
+            session.commit()
+            logger.info("✅ Скоринг завершён")
         
         # === АВТОМАТИЧЕСКИЕ ПРИГЛАШЕНИЯ ДЛЯ ТОП-КАНДИДАТОВ ===
         if filtered_candidates:
