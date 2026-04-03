@@ -2162,7 +2162,7 @@ async def gather_real_candidates(vacancy_id: int) -> None:
         logger.info(f"✅ Прошли фильтры: {passed_count}")
         logger.info(f"❌ Отсеяно: {len(candidates) - passed_count}")
 
-                        filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
+        filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
         if filtered_candidates:
             vacancy_desc = vacancy_to_description(vacancy, company)
             payload = [
@@ -4015,6 +4015,7 @@ async def cmd_find(message: Message):
         parse_mode="HTML"
     )
 
+
 @router.message(Command("recalculate"))
 async def cmd_recalculate(message: Message):
     """Пересчитать оценки всех кандидатов по текущей вакансии"""
@@ -4158,51 +4159,6 @@ async def cmd_recalculate(message: Message):
             parse_mode="HTML"
         )
 
-
-async def main() -> None:
-    global vk_thread, vk_own_loop, vk_bot_instance
-    
-    init_db()
-    if not settings.bot_token:
-        raise RuntimeError("BOT_TOKEN не задан в .env")
-    
-    logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК GWork HR BOT")
-    logger.info("=" * 60)
-    logger.info(f"✅ BOT_TOKEN: {'установлен' if settings.bot_token else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ HH_API_TOKEN: {'установлен' if settings.hh_api_token else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ SUPERJOB_API_KEY: {'установлен' if settings.superjob_api_key else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ HABR_CLIENT_ID: {'установлен' if settings.habr_client_id else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ DEEPSEEK_API_KEY: {'установлен' if settings.deepseek_api_key else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ YANDEX_LOGIN: {'установлен' if settings.yandex_login else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ VK_TOKEN: {'установлен' if settings.vk_token else 'НЕ УСТАНОВЛЕН'}")
-    logger.info(f"✅ SMTP: {'настроен' if email_service.is_configured() else 'НЕ НАСТРОЕН'}")
-    logger.info("=" * 60)
-    
-    # Запускаем веб-сервер для Render health checks в отдельном потоке
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-    logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
-    
-    # Удаляем webhook Telegram, чтобы не было конфликта
-    await bot.delete_webhook()
-    logger.info("✅ Webhook Telegram удалён")
-    
-    # ЗАПУСКАЕМ VK БОТА В ОТДЕЛЬНОМ ПОТОКЕ СО СВОИМ EVENT LOOP
-    if settings.has_vk:
-        vk_thread = threading.Thread(target=run_vk_bot_in_separate_loop, daemon=True)
-        vk_thread.start()
-        logger.info("📱 VK бот запущен в отдельном потоке со своим event loop'ом")
-    else:
-        logger.info("📱 VK бот не запущен (VK_TOKEN не настроен)")
-    
-    # Запускаем Telegram бота в основном потоке (главный event loop)
-    logger.info("🤖 Запускаем Telegram бота в основном event loop...")
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
 
 async def main() -> None:
     global vk_thread, vk_own_loop, vk_bot_instance
