@@ -3897,7 +3897,61 @@ async def cmd_find(message: Message):
         "Пока вы можете просматривать уже найденных кандидатов через /candidates",
         parse_mode="HTML"
     )
-
+@router.message(Command("recalculate"))
+async def cmd_recalculate(message: Message):
+    """Пересчитать оценки всех кандидатов по текущей вакансии"""
+    with get_session() as session:
+        company = session.query(Company).filter(Company.owner_id == message.from_user.id).first()
+        if not company:
+            await message.answer("❌ Сначала пройдите онбординг: /onboarding")
+            return
+        
+        vacancies = session.query(Vacancy).filter(Vacancy.company_id == company.id).order_by(Vacancy.created_at.desc()).all()
+        if not vacancies:
+            await message.answer("📭 Нет вакансий")
+            return
+        
+        vacancy = vacancies[0]
+        candidates = session.query(Candidate).filter(Candidate.vacancy_id == vacancy.id).all()
+        
+        status_msg = await message.answer(f"🔄 Пересчитываю оценки для {len(candidates)} кандидатов...")
+        
+        recalculated = 0
+        for candidate in candidates:
+            if candidate.status != CandidateStatus.REJECTED.value or candidate.score < 60:
+                score, explanation_parts = calculate_candidate_score(candidate, vacancy, company)
+                
+                if candidate.red_flags:
+                    penalty = get_red_flags_score(candidate.raw_text)
+                    if penalty > 0:
+                        score = max(0, score - penalty)
+                        explanation_parts.append(f"🚩 Штраф за красные флаги: -{penalty}")
+                
+                candidate.score = score
+                candidate.explanation = " | ".join(explanation_parts)
+                
+                if candidate.score >= 80:
+                    candidate.status = CandidateStatus.FILTERED.value
+                elif candidate.score < 60:
+                    candidate.status = CandidateStatus.REJECTED.value
+                    candidate.rejection_reason = f"Низкая оценка после пересчёта: {score}/100"
+                
+                recalculated += 1
+        
+        session.commit()
+        
+        await status_msg.edit_text(
+            f"✅ <b>Пересчёт завершён!</b>\n\n"
+            f"📊 Пересчитано: {recalculated} кандидатов\n"
+            f"🎯 Новая оценка учитывает:\n"
+            f"• Город (до 20 баллов)\n"
+            f"• Опыт (до 25 баллов)\n"
+            f"• Навыки (до 30 баллов)\n"
+            f"• Зарплату (до 15 баллов)\n"
+            f"• Качество резюме (до 10 баллов)\n\n"
+            f"Посмотреть обновлённые оценки: /candidates",
+            parse_mode="HTML"
+        )
 
 async def main() -> None:
     global vk_thread, vk_own_loop, vk_bot_instance
