@@ -2162,7 +2162,7 @@ async def gather_real_candidates(vacancy_id: int) -> None:
         logger.info(f"✅ Прошли фильтры: {passed_count}")
         logger.info(f"❌ Отсеяно: {len(candidates) - passed_count}")
 
-        filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
+                filtered_candidates = [c for c in candidates if c.status != CandidateStatus.REJECTED.value]
         if filtered_candidates:
             vacancy_desc = vacancy_to_description(vacancy, company)
             payload = [
@@ -2177,35 +2177,29 @@ async def gather_real_candidates(vacancy_id: int) -> None:
                 for c in filtered_candidates
             ]
 
+            # Используем улучшенную функцию скоринга с fallback
             try:
-                scores = deepseek.score_candidates(vacancy_desc, payload)
-                scores_by_id = {int(s["id"]): s for s in scores if "id" in s}
-
+                scores_dict = await score_candidates_with_fallback(vacancy_desc, payload, vacancy, company)
+                
                 for c in filtered_candidates:
-                    result = scores_by_id.get(c.id)
+                    result = scores_dict.get(c.id)
                     if result:
                         c.score = int(result.get("score", 0))
                         c.explanation = str(result.get("explanation", ""))
                     else:
-                        base = 50
-                        if vacancy.city.lower() in c.city.lower():
-                            base += 15
-                        c.score = max(0, min(100, base))
-                        c.explanation = "эвристическая оценка по городу"
+                        c.score = 50
+                        c.explanation = "Базовая оценка (API недоступен)"
                     
-                    if c.red_flags:
-                        penalty = get_red_flags_score(c.raw_text)
-                        if penalty > 0:
-                            old_score = c.score
-                            c.score = max(0, c.score - penalty)
-                            if c.explanation:
-                                c.explanation += f" | Штраф за красные флаги: -{penalty} баллов"
-                            else:
-                                c.explanation = f"Штраф за красные флаги: -{penalty} баллов"
-                            logger.info(f"Кандидат {c.name_or_nick}: скор снижен с {old_score} до {c.score} (штраф {penalty})")
+                    logger.info(f"📊 Кандидат {c.name_or_nick}: оценка {c.score}/100 - {c.explanation[:100]}")
                     
                     if c.score >= 80:
                         c.status = CandidateStatus.FILTERED.value
+                    elif c.score >= 60:
+                        c.status = CandidateStatus.FOUND.value
+                    else:
+                        c.status = CandidateStatus.REJECTED.value
+                        if not c.rejection_reason:
+                            c.rejection_reason = f"Низкая оценка: {c.score}/100"
                 
                 session.commit()
                 logger.info("✅ Скоринг завершён")
