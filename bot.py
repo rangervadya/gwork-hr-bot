@@ -906,16 +906,18 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
             logger.warning(f"Нет контакта для кандидата {candidate.id}")
             return False
         
-        # Проверяем, является ли контакт Telegram username
-        if contact.startswith('@'):
-            username = contact[1:]
+        # Ищем Telegram username в контактной информации
+        tg_match = re.search(r'@(\w+)', contact)
+        
+        if tg_match:
+            username = tg_match.group(0)
             try:
                 await bot.send_message(
-                    chat_id=f"@{username}",
+                    chat_id=username,
                     text=message_text,
                     parse_mode="HTML"
                 )
-                logger.info(f"✅ Сообщение отправлено @{username}")
+                logger.info(f"✅ Сообщение отправлено {username}")
                 
                 # Обновляем время последнего сообщения
                 with get_session() as session:
@@ -928,7 +930,7 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
                 
                 return True
             except Exception as e:
-                logger.error(f"❌ Ошибка отправки @{username}: {e}")
+                logger.error(f"❌ Ошибка отправки {username}: {e}")
                 return False
         
         # Проверяем, является ли контакт VK ID
@@ -941,7 +943,19 @@ async def send_message_to_candidate(candidate: Candidate, message_text: str) -> 
                     logger.info(f"✅ Сообщение отправлено VK ID {vk_id}")
                 return success
         
-        logger.info(f"Контакт {contact} не является Telegram username или VK ID")
+        # Если не нашли Telegram или VK, но есть email - уведомляем
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', contact)
+        if email_match:
+            logger.info(f"📧 У кандидата {candidate.id} есть email: {email_match.group(0)} (требуется ручная отправка)")
+            # Отправляем уведомление работодателю
+            with get_session() as session:
+                vacancy = session.query(Vacancy).filter(Vacancy.id == candidate.vacancy_id).first()
+                company = session.query(Company).filter(Company.id == vacancy.company_id).first()
+                if company:
+                    await _send_email_contact_notification(company, candidate, email_match.group(0), contact, vacancy)
+            return False
+        
+        logger.info(f"Контакт {contact} не является Telegram username, VK ID или email")
         return False
         
     except Exception as e:
