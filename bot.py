@@ -224,26 +224,199 @@ async def auto_invite_top_candidates(vacancy_id: int, company: Company, vacancy:
         ).all()
         
         invited_count = 0
+        no_contact_count = 0
+        email_count = 0
+        phone_count = 0
+        
         for candidate in top_candidates:
-            # Проверяем, есть ли контакт (Telegram username)
-            if candidate.contact and candidate.contact.startswith('@'):
+            # Проверяем наличие контактов
+            contact_info = candidate.contact or ""
+            
+            # Ищем Telegram username
+            tg_match = re.search(r'@(\w+)', contact_info)
+            
+            if tg_match:
+                # Есть Telegram - отправляем автоматически
+                tg_username = tg_match.group(0)
                 invite_text = generate_invite_message(candidate, vacancy, company)
                 try:
                     await bot.send_message(
-                        chat_id=candidate.contact,
+                        chat_id=tg_username,
                         text=invite_text,
                         parse_mode="HTML"
                     )
                     candidate.status = CandidateStatus.INVITED.value
                     invited_count += 1
-                    logger.info(f"✅ Авто-приглашение отправлено {candidate.name_or_nick} ({candidate.contact})")
-                    await asyncio.sleep(0.5)  # Пауза, чтобы не спамить
+                    logger.info(f"✅ Авто-приглашение отправлено в Telegram: {candidate.name_or_nick} ({tg_username})")
+                    await asyncio.sleep(0.5)
                 except Exception as e:
-                    logger.error(f"❌ Ошибка отправки приглашения {candidate.name_or_nick}: {e}")
+                    logger.error(f"❌ Ошибка отправки в Telegram {candidate.name_or_nick}: {e}")
+                    # Если не отправилось, пробуем другие контакты
+                    await _send_alternative_contact_notification(company, candidate, contact_info, vacancy)
+            else:
+                # Нет Telegram - ищем email или телефон
+                no_contact_count += 1
+                
+                # Поиск email
+                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', contact_info)
+                # Поиск телефона (российские номера)
+                phone_match = re.search(r'\+?7[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}', contact_info)
+                
+                if email_match:
+                    email_count += 1
+                    await _send_email_contact_notification(company, candidate, email_match.group(0), contact_info, vacancy)
+                elif phone_match:
+                    phone_count += 1
+                    await _send_phone_contact_notification(company, candidate, phone_match.group(0), contact_info, vacancy)
+                else:
+                    # Нет никаких контактов - просто уведомляем работодателя
+                    await _send_no_contact_notification(company, candidate, contact_info, vacancy)
         
-        if invited_count > 0:
-            logger.info(f"📨 Отправлено {invited_count} авто-приглашений")
-            session.commit()
+        session.commit()
+        
+        # Отправляем сводку работодателю
+        if invited_count > 0 or no_contact_count > 0:
+            summary = f"📊 <b>Сводка авто-приглашений</b>\n\n"
+            summary += f"✅ Отправлено в Telegram: {invited_count}\n"
+            if email_count > 0:
+                summary += f"📧 Найдено email: {email_count} (требуется ручной контакт)\n"
+            if phone_count > 0:
+                summary += f"📞 Найдено телефонов: {phone_count} (требуется ручной контакт)\n"
+            if no_contact_count - email_count - phone_count > 0:
+                summary += f"⚠️ Без контактов: {no_contact_count - email_count - phone_count}\n"
+            
+            await bot.send_message(
+                chat_id=company.owner_id,
+                text=summary,
+                parse_mode="HTML"
+            )
+            logger.info(f"📨 Отправлено {invited_count} авто-приглашений, {no_contact_count} кандидатов без Telegram")
+
+
+async def _send_alternative_contact_notification(company: Company, candidate: Candidate, contact_info: str, vacancy: Vacancy):
+    """Отправляет уведомление работодателю о кандидате с альтернативными контактами"""
+    
+    # Ищем доступные контакты
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', contact_info)
+    phone_match = re.search(r'\+?7[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}', contact_info)
+    
+    contacts_list = []
+    if email_match:
+        contacts_list.append(f"📧 Email: {email_match.group(0)}")
+    if phone_match:
+        contacts_list.append(f"📞 Телефон: {phone_match.group(0)}")
+    
+    contacts_text = "\n".join(contacts_list) if contacts_list else "❌ Контакты не найдены"
+    
+    message = (
+        f"⚠️ <b>Кандидат без Telegram</b>\n\n"
+        f"👤 {candidate.name_or_nick}\n"
+        f"📊 Оценка: {candidate.score}/100\n"
+        f"📍 Город: {candidate.city}\n"
+        f"📝 Опыт: {candidate.experience_text[:100]}...\n\n"
+        f"📋 <b>Доступные контакты:</b>\n{contacts_text}\n\n"
+        f"💼 Вакансия: {vacancy.role}\n"
+        f"🏢 Компания: {company.name_and_industry}\n\n"
+        f"<b>Действия:</b>\n"
+        f"• Свяжитесь с кандидатом по указанным контактам\n"
+        f"• Используйте скрипт диалога: /candidates\n"
+        f"• Или посмотрите полный профиль в системе"
+    )
+    
+    await bot.send_message(
+        chat_id=company.owner_id,
+        text=message,
+        parse_mode="HTML"
+    )
+    
+    # Обновляем статус кандидата
+    candidate.status = CandidateStatus.CLARIFY.value
+    candidate.rejection_reason = "Нет Telegram для авто-приглашения. Требуется ручной контакт."
+
+
+async def _send_email_contact_notification(company: Company, candidate: Candidate, email: str, contact_info: str, vacancy: Vacancy):
+    """Отправляет уведомление для кандидата с email"""
+    
+    message = (
+        f"📧 <b>Кандидат с email (нет Telegram)</b>\n\n"
+        f"👤 {candidate.name_or_nick}\n"
+        f"📊 Оценка: {candidate.score}/100\n"
+        f"📍 Город: {candidate.city}\n"
+        f"📧 Email: {email}\n\n"
+        f"💼 Вакансия: {vacancy.role}\n\n"
+        f"<b>Рекомендуемый текст письма:</b>\n"
+        f"<code>Здравствуйте, {candidate.name_or_nick}!\n\n"
+        f"Меня зовут [Ваше имя], я из компании {company.name_and_industry}.\n"
+        f"Мы ищем {vacancy.role} и ваш опыт нам показался интересным.\n\n"
+        f"Приглашаю вас на собеседование. Когда вам было бы удобно?\n\n"
+        f"С уважением,\n"
+        f"HR-отдел {company.name_and_industry}</code>\n\n"
+        f"📋 <b>Все контакты кандидата:</b>\n{contact_info}"
+    )
+    
+    await bot.send_message(
+        chat_id=company.owner_id,
+        text=message,
+        parse_mode="HTML"
+    )
+    
+    candidate.status = CandidateStatus.CLARIFY.value
+    candidate.rejection_reason = f"Нет Telegram. Email: {email}"
+
+
+async def _send_phone_contact_notification(company: Company, candidate: Candidate, phone: str, contact_info: str, vacancy: Vacancy):
+    """Отправляет уведомление для кандидата с телефоном"""
+    
+    message = (
+        f"📞 <b>Кандидат с телефоном (нет Telegram)</b>\n\n"
+        f"👤 {candidate.name_or_nick}\n"
+        f"📊 Оценка: {candidate.score}/100\n"
+        f"📍 Город: {candidate.city}\n"
+        f"📞 Телефон: {phone}\n\n"
+        f"💼 Вакансия: {vacancy.role}\n\n"
+        f"<b>Рекомендуемый скрипт звонка:</b>\n"
+        f"«Здравствуйте, {candidate.name_or_nick}! Меня зовут [Имя], я из компании {company.name_and_industry}. "
+        f"Мы ищем {vacancy.role}, и ваш опыт нам показался интересным. "
+        f"Могу я пригласить вас на собеседование? Когда вам удобно?»\n\n"
+        f"📋 <b>Все контакты кандидата:</b>\n{contact_info}"
+    )
+    
+    await bot.send_message(
+        chat_id=company.owner_id,
+        text=message,
+        parse_mode="HTML"
+    )
+    
+    candidate.status = CandidateStatus.CLARIFY.value
+    candidate.rejection_reason = f"Нет Telegram. Телефон: {phone}"
+
+
+async def _send_no_contact_notification(company: Company, candidate: Candidate, contact_info: str, vacancy: Vacancy):
+    """Отправляет уведомление о кандидате без контактов"""
+    
+    message = (
+        f"❌ <b>Кандидат без контактов!</b>\n\n"
+        f"👤 {candidate.name_or_nick}\n"
+        f"📊 Оценка: {candidate.score}/100\n"
+        f"📍 Город: {candidate.city}\n"
+        f"📝 Опыт: {candidate.experience_text[:150]}...\n\n"
+        f"💼 Вакансия: {vacancy.role}\n"
+        f"🔗 Ссылка на профиль: {candidate.source_link or 'Не указана'}\n\n"
+        f"<b>⚠️ Внимание!</b> У кандидата не найдено контактных данных.\n"
+        f"Попробуйте найти контакты через:\n"
+        f"• Ссылку на профиль выше\n"
+        f"• Поиск по имени в соцсетях\n"
+        f"• Если это Telegram-канал - попробуйте написать в личку"
+    )
+    
+    await bot.send_message(
+        chat_id=company.owner_id,
+        text=message,
+        parse_mode="HTML"
+    )
+    
+    candidate.status = CandidateStatus.CLARIFY.value
+    candidate.rejection_reason = "Нет контактных данных для связи"
 
 
 # ===== ПОИСК РЕАЛЬНЫХ РЕЗЮМЕ В HEADHUNTER =====
