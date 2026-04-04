@@ -1,5 +1,6 @@
 # FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support + Auto-invites
 # ВЕРСИЯ С РАЗДЕЛЬНЫМИ EVENT LOOP ДЛЯ VK И TELEGRAM
+# FIXED: search_trudvsem_candidates теперь ищет ТОЛЬКО резюме/кандидатов, а не вакансии
 
 import asyncio
 import logging
@@ -800,10 +801,10 @@ async def search_habr_candidates(query: str, city: str, limit: int = 10) -> List
         return []
 
 
-# ===== ПОИСК КАНДИДАТОВ В TRUDVSEM (РАБОТА В РОССИИ) =====
+# ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ПОИСКА КАНДИДАТОВ В TRUDVSEM (ТОЛЬКО РЕЗЮМЕ) =====
 async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> List[Dict[str, Any]]:
     """
-    Поиск кандидатов на портале Работа в России
+    Поиск кандидатов на портале Работа в России (ТОЛЬКО РЕЗЮМЕ, а не вакансии)
     """
     try:
         region_map = {
@@ -822,8 +823,9 @@ async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> 
         region = region_map.get(city.lower(), "77")
         
         async with httpx.AsyncClient() as client:
+            # Ищем РЕЗЮМЕ (resumes), а не вакансии!
             response = await client.get(
-                "https://opendata.trudvsem.ru/api/v1/vacancies",
+                "https://opendata.trudvsem.ru/api/v1/resumes",
                 params={
                     "text": query,
                     "region": region,
@@ -836,51 +838,129 @@ async def search_trudvsem_candidates(query: str, city: str, limit: int = 10) -> 
             if response.status_code == 200:
                 data = response.json()
                 
+                # Получаем список резюме
                 try:
-                    vacancies = data.get("results", {}).get("vacancies", [])
+                    resumes = data.get("results", {}).get("resumes", [])
+                    if not resumes:
+                        # Пробуем альтернативный формат ответа
+                        resumes = data.get("resumes", [])
                 except:
-                    vacancies = []
+                    resumes = []
                 
-                logger.info(f"✅ Trudvsem: найдено {len(vacancies)} вакансий")
+                logger.info(f"✅ Trudvsem: найдено {len(resumes)} резюме")
                 
                 candidates = []
-                for item in vacancies[:limit]:
-                    vacancy = item.get("vacancy", {})
+                for item in resumes[:limit]:
+                    # Извлекаем данные резюме
+                    resume = item.get("resume", item)
                     
-                    name = vacancy.get("job-name", "Без названия")
+                    # Имя кандидата
+                    first_name = resume.get("first-name", "")
+                    last_name = resume.get("last-name", "")
+                    middle_name = resume.get("middle-name", "")
                     
-                    company_name = vacancy.get("company", {})
-                    company_name_str = company_name.get("short_name") or company_name.get("name", "Не указана")
+                    name_parts = [last_name, first_name, middle_name]
+                    full_name = " ".join([p for p in name_parts if p]) or "Кандидат"
                     
-                    salary_min = vacancy.get("salary_min", "")
-                    salary_max = vacancy.get("salary_max", "")
-                    salary_text = "Не указана"
+                    # Город
+                    area = resume.get("area", {})
+                    city_name = area.get("name", city) if isinstance(area, dict) else city
                     
-                    if salary_min and salary_max:
-                        salary_text = f"{salary_min}-{salary_max} руб."
-                    elif salary_min:
-                        salary_text = f"от {salary_min} руб."
-                    elif salary_max:
-                        salary_text = f"до {salary_max} руб."
+                    # Опыт работы
+                    experience_items = resume.get("experience", [])
+                    experience_text = []
+                    for exp in experience_items[:3]:
+                        position = exp.get("position", "")
+                        company_name = exp.get("company", "")
+                        start_date = exp.get("start-date", "")
+                        end_date = exp.get("end-date", "")
+                        if position and company_name:
+                            experience_text.append(f"{position} в {company_name}")
+                        elif position:
+                            experience_text.append(f"{position}")
                     
-                    requirement = vacancy.get("requirement", {})
-                    experience = requirement.get("experience", "Опыт не указан")
+                    experience_str = "\n".join(experience_text) if experience_text else "Опыт не указан"
                     
-                    vacancy_url = vacancy.get("vac_url", "")
+                    # Навыки
+                    skills_list = []
+                    skills_data = resume.get("skills", [])
+                    if isinstance(skills_data, list):
+                        for skill in skills_data:
+                            if isinstance(skill, dict):
+                                skill_name = skill.get("name", "")
+                                if skill_name:
+                                    skills_list.append(skill_name)
+                            elif isinstance(skill, str):
+                                skills_list.append(skill)
+                    
+                    # Образование
+                    education = resume.get("education", [])
+                    education_text = ""
+                    for edu in education[:2]:
+                        if isinstance(edu, dict):
+                            edu_name = edu.get("name", "")
+                            if edu_name:
+                                education_text += f"🎓 {edu_name}\n"
+                    
+                    # Желаемая зарплата
+                    salary = resume.get("salary", "")
+                    salary_text = f"💰 {salary} руб." if salary else ""
+                    
+                    # Контакты
+                    contacts = []
+                    # Email
+                    email = resume.get("email", "")
+                    if email:
+                        contacts.append(f"📧 {email}")
+                    # Телефон
+                    phone = resume.get("phone", "")
+                    if phone:
+                        contacts.append(f"📞 {phone}")
+                    
+                    contact_str = "\n".join(contacts) if contacts else ""
+                    
+                    # Ссылка на резюме
+                    resume_url = resume.get("url", "")
+                    if not resume_url:
+                        resume_id = resume.get("id", "")
+                        if resume_id:
+                            resume_url = f"https://trudvsem.ru/resume/{resume_id}"
+                    
+                    # Текст резюме
+                    about_parts = []
+                    if salary_text:
+                        about_parts.append(salary_text)
+                    if education_text:
+                        about_parts.append(education_text)
+                    
+                    about_text = "\n".join(about_parts) if about_parts else resume.get("about", "")[:200]
+                    
+                    # Возраст
+                    birth_date = resume.get("birth-date", "")
+                    age_text = ""
+                    if birth_date:
+                        try:
+                            birth_year = int(birth_date[:4])
+                            age = datetime.now().year - birth_year
+                            if 16 <= age <= 100:
+                                age_text = f"🎂 {age} лет"
+                                about_parts.append(age_text)
+                        except:
+                            pass
                     
                     candidates.append({
-                        "name": f"🏢 {name}",
-                        "city": city,
-                        "experience": experience,
-                        "skills": [query],
-                        "about": f"Компания: {company_name_str}\n💰 {salary_text}",
+                        "name": full_name,
+                        "city": city_name,
+                        "experience": experience_str[:500],
+                        "skills": skills_list[:10],
+                        "about": about_text[:500],
                         "source": "trudvsem",
-                        "url": vacancy_url,
-                        "contact": "",
+                        "url": resume_url,
+                        "contact": contact_str,
                         "is_real": True
                     })
                 
-                logger.info(f"✅ Trudvsem: обработано {len(candidates)} вакансий")
+                logger.info(f"✅ Trudvsem: обработано {len(candidates)} кандидатов")
                 return candidates
             else:
                 logger.error(f"❌ Trudvsem ошибка: {response.status_code}")
@@ -2041,7 +2121,7 @@ async def gather_real_candidates(vacancy_id: int) -> None:
         except Exception as e:
             logger.error(f"❌ Ошибка Habr: {e}")
 
-        # 4) Trudvsem
+        # 4) Trudvsem - ИСПРАВЛЕНО: теперь ищет ТОЛЬКО резюме
         logger.info(f"🔍 Поиск кандидатов в Trudvsem: {vacancy.role} в {vacancy.city}")
         try:
             trudvsem_candidates = await search_trudvsem_candidates(vacancy.role, vacancy.city, limit=5)
