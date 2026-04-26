@@ -4264,9 +4264,7 @@ async def main() -> None:
     web_thread.start()
     logger.info("🌐 Веб-сервер для health checks запущен в фоновом режиме")
     
-    # Удаляем webhook Telegram, чтобы не было конфликта
-    await bot.delete_webhook()
-    logger.info("✅ Webhook Telegram удалён")
+    # Удаляем вебхук с принудительным сбросом ожидающих обновлений
     
     # ЗАПУСКАЕМ VK БОТА В ОТДЕЛЬНОМ ПОТОКЕ СО СВОИМ EVENT LOOP
     if settings.has_vk:
