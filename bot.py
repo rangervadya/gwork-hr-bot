@@ -1,3 +1,4 @@
+# bot_main.py
 # FIXED VERSION: All sources + Hard Filters + Red Flags + Normalization + Pre-qualification + Date + Export + Analytics + Email + Calendar + Web Server for Render + VK Support + Auto-invites
 # ВЕРСИЯ С РАЗДЕЛЬНЫМИ EVENT LOOP ДЛЯ VK И TELEGRAM
 # FIXED: search_trudvsem_candidates теперь ищет ТОЛЬКО резюме/кандидатов, а не вакансии
@@ -1118,8 +1119,6 @@ def generate_followup_message(candidate: Candidate, vacancy: Vacancy, company: C
         )
     else:
         return ""
-
-# Добавьте эти функции в bot.py (например, после функции generate_followup_message)
 
 def calculate_candidate_score(candidate: Candidate, vacancy: Vacancy, company: Company) -> tuple:
     """
