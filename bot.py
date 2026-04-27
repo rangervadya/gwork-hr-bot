@@ -1401,7 +1401,7 @@ class EmailState(StatesGroup):
 
 def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь глобальным администратором"""
-    return False
+    return user_id in settings.admin_ids if settings.admin_ids else False
 
 
 def is_company_owner(user_id: int, company: Company) -> bool:
