@@ -146,6 +146,26 @@ class InterviewSlot(Base):
 
     vacancy: Mapped[Vacancy] = relationship("Vacancy", back_populates="interview_slots")
 
+class PaymentStatus(str, enum.Enum):
+    CREATED = "created"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, index=True)
+    vacancy_id = Column(Integer, ForeignKey("vacancies.id"))
+    amount = Column(Integer)
+    currency = Column(String, default="XTR")
+    tariff_key = Column(String)
+    candidates_limit = Column(Integer)
+    candidates_used = Column(Integer, default=0)
+    status = Column(String, default=PaymentStatus.CREATED.value)
+    telegram_payload = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
 
 class Candidate(Base):
     __tablename__ = "candidates"
