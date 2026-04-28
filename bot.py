@@ -4321,7 +4321,7 @@ async def cmd_recalculate(message: Message):
 
 
 TARIFFS = {
-    "stars_2250": {"label": "🌟 3 кандидата", "price": 2250, "candidates": 3},
+    "stars_1": {"label": "🌟 3 кандидата", "price": 1, "candidates": 3},
     "stars_7450": {"label": "🚀 15 кандидатов", "price": 7450, "candidates": 15},
 }
 
